@@ -53,6 +53,7 @@ public class Settings {
  public List<string> DisabledScreens = new List<string>();
  public int Cache = 400;
  public bool Hardware = true;
+ public bool Multicam = true;
  public static Settings Defaults() {
   var s = new Settings(); var screens = Screen.AllScreens;
   for(int i=0;i<3;i++) s.Pages.Add(new ViewPage { Name="TV " + (i+1), Rows=2, Columns=i==2?2:4, Screen=screens[Math.Min(i,screens.Length-1)].DeviceName });
@@ -267,7 +268,7 @@ public static class Vlc {
   if(!File.Exists(System.IO.Path.Combine(path,"libvlc.dll")))path=System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"VideoLAN","VLC");
   if(!File.Exists(System.IO.Path.Combine(path,"libvlc.dll"))) {Failure="VLC fehlt. Bitte VLC 3 (64 Bit) von videolan.org installieren und SpielfeldTV neu starten. Verwaltung und Demo funktionieren auch ohne VLC.";return false;}
   try { SetDllDirectory(path); Environment.SetEnvironmentVariable("VLC_PLUGIN_PATH",System.IO.Path.Combine(path,"plugins"));
-   var args=Diagnostics?new[]{"--no-video-title-show","--no-audio","--no-osd","--no-drop-late-frames","--no-skip-frames","--file-logging","--logfile="+System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"vlc-test.log"),"--verbose=2"}:new[]{"--no-video-title-show","--no-audio","--quiet","--no-osd","--no-drop-late-frames","--no-skip-frames"};
+   var args=Diagnostics?new[]{"--no-video-title-show","--no-audio","--no-osd","--drop-late-frames","--no-skip-frames","--file-logging","--logfile="+System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"vlc-test.log"),"--verbose=2"}:new[]{"--no-video-title-show","--no-audio","--quiet","--no-osd","--drop-late-frames","--no-skip-frames"};
    var ptrs=args.Select(Marshal.StringToHGlobalAnsi).ToArray(); var argv=Marshal.AllocHGlobal(IntPtr.Size*ptrs.Length);
    try {Marshal.Copy(ptrs,0,argv,ptrs.Length);Instance=libvlc_new(ptrs.Length,argv);} finally {foreach(var p in ptrs)Marshal.FreeHGlobal(p);Marshal.FreeHGlobal(argv);}
    if(Instance==IntPtr.Zero)throw new Exception("VLC konnte nicht gestartet werden.");return true;
@@ -281,20 +282,20 @@ public static class NativeBridge {
 }
 public class RawCameraSource : IDisposable {
  public static int FrameRate(byte value){int rate=value&63;return rate>0?rate:12;}
- TcpClient camera,viewer;TcpListener listener;TaskCompletionSource<RawCameraSource> ready=new TaskCompletionSource<RawCameraSource>();volatile bool closed;uint session,sequence;List<byte> buffer=new List<byte>();Camera settings;string user,hash;public string Url,Demux;public int Fps;long received;public long Received {get{return Interlocked.Read(ref received);}}
+ TcpClient camera,viewer;TcpListener listener;TaskCompletionSource<RawCameraSource> ready=new TaskCompletionSource<RawCameraSource>();volatile bool closed;uint session,sequence;CameraPackets buffer=new CameraPackets();Camera settings;string user,hash;public string Url,Demux;public int Fps;long received,frameCount;public long Frames {get{return Interlocked.Read(ref frameCount);}} public long Received {get{return Interlocked.Read(ref received);}}
  RawCameraSource(Camera c,string u,string h){settings=c.Copy();user=u;hash=h;}
- public static async Task<RawCameraSource> Open(Camera c){string user,hash;if(!NativeBridge.Credentials(c,out user,out hash)){var profiles=await Onvif.Read(c,CancellationToken.None,new Progress<string>(s=>{}));var copy=c.Copy();copy.Path=profiles[0].Path;if(!NativeBridge.Credentials(copy,out user,out hash))throw new Exception("Kamera-Anmeldewert fehlt. Stream automatisch ermitteln.");}var source=new RawCameraSource(c,user,hash);var running=Task.Run(()=>source.Run());try{return await source.ready.Task;}catch{source.Dispose();throw;}}
+ public static async Task<RawCameraSource> Open(Camera c){string user,hash;if(!NativeBridge.Credentials(c,out user,out hash)){var profiles=await Onvif.Read(c,CancellationToken.None,new Progress<string>(s=>{}));var copy=c.Copy();copy.Path=profiles[0].Path;if(!NativeBridge.Credentials(copy,out user,out hash))throw new Exception("Kamera-Anmeldewert fehlt. Stream automatisch ermitteln.");}var source=new RawCameraSource(c,user,hash);var running=Task.Factory.StartNew(()=>source.Run(),CancellationToken.None,TaskCreationOptions.LongRunning,TaskScheduler.Default);try{return await source.ready.Task;}catch{source.Dispose();throw;}}
  static void Read(Stream stream,byte[] bytes){int pos=0;while(pos<bytes.Length){int n=stream.Read(bytes,pos,bytes.Length-pos);if(n==0)throw new IOException();pos+=n;}}
  byte[] Chunk(){var h=new byte[20];Read(camera.GetStream(),h);if(h[0]!=255)throw new IOException();session=BitConverter.ToUInt32(h,4);int length=BitConverter.ToInt32(h,16);if(length<0||length>8388608)throw new IOException();var data=new byte[length];Read(camera.GetStream(),data);return data;}
  byte[] Command(ushort command,string body){byte[] data=Encoding.UTF8.GetBytes(body+"\n\0"),header=new byte[20];header[0]=255;BitConverter.GetBytes(session).CopyTo(header,4);BitConverter.GetBytes(sequence++).CopyTo(header,8);BitConverter.GetBytes(command).CopyTo(header,14);BitConverter.GetBytes(data.Length).CopyTo(header,16);camera.GetStream().Write(header,0,20);camera.GetStream().Write(data,0,data.Length);return Chunk();}
  void Success(byte[] data){var m=Regex.Match(Encoding.UTF8.GetString(data),"\"Ret\"\\s*:\\s*(\\d+)");if(!m.Success||m.Groups[1].Value!="100")throw new Exception("Kamera lehnt die native Videoanfrage ab.");}
- byte[] Packet(){while(!closed){if(buffer.Count>=16){var b=buffer.ToArray();if(b[0]!=0||b[1]!=0||b[2]!=1)throw new IOException();int tag=b[3];int length=(tag==252||tag==254)?BitConverter.ToInt32(b,12)+16:tag==253?BitConverter.ToInt32(b,4)+8:(tag==250||tag==249)?BitConverter.ToUInt16(b,6)+8:-1;if(length<8||length>8388608)throw new IOException();if(buffer.Count>=length){var result=b.Take(length).ToArray();buffer.RemoveRange(0,length);return result;}}buffer.AddRange(Chunk());}throw new IOException();}
+ byte[] Packet(){while(!closed){byte[] packet;if(buffer.TryRead(out packet))return packet;buffer.AddRange(Chunk());}throw new IOException();}
  void Run(){try{
   camera=new TcpClient();camera.NoDelay=true;var connect=camera.ConnectAsync(settings.Host,settings.DvripPort);if(!connect.Wait(5000))throw new IOException();camera.ReceiveTimeout=10000;camera.SendTimeout=5000;
   string login="{\"EncryptType\":\"MD5\",\"LoginType\":\"DVRIP-Web\",\"PassWord\":\""+hash+"\",\"UserName\":\""+user.Replace("\\","\\\\").Replace("\"","\\\"")+"\"}";Success(Command(1000,login));
   string kind=Regex.IsMatch(settings.Path,@"stream=1(?:\D|$)")?"Extra1":"Main";string monitor="{\"Name\":\"OPMonitor\",\"SessionID\":\"0x"+session.ToString("X8")+"\",\"OPMonitor\":{\"Action\":\"Claim\",\"Parameter\":{\"Channel\":0,\"CombinMode\":\"NONE\",\"StreamType\":\""+kind+"\",\"TransMode\":\"TCP\"}}}";Success(Command(1413,monitor));var start=Command(1410,monitor.Replace("Claim","Start"));if(start.Length>=4&&start[0]==0&&start[1]==0&&start[2]==1)buffer.AddRange(start);
-  byte[] first;var firstDeadline=DateTime.UtcNow.AddSeconds(15);do{if(DateTime.UtcNow>firstDeadline)throw new IOException();first=Packet();}while(first[3]!=252&&first[3]!=254);int codec=first[4];Demux=(codec==2||codec==18)?"h264":(codec==3||codec==19||codec==67||codec==83)?"hevc":null;if(Demux==null)throw new Exception("Nicht unterstütztes Kamera-Videoformat.");Fps=FrameRate(first[5]);listener=new TcpListener(IPAddress.Loopback,0);listener.Start();Url="tcp://127.0.0.1:"+((IPEndPoint)listener.LocalEndpoint).Port;ready.TrySetResult(this);viewer=listener.AcceptTcpClient();viewer.NoDelay=true;viewer.SendTimeout=10000;var output=viewer.GetStream();output.Write(first,16,first.Length-16);Interlocked.Increment(ref received);
-  while(!closed){var frame=Packet();if(frame[3]==252||frame[3]==254){output.Write(frame,16,frame.Length-16);Interlocked.Increment(ref received);}else if(frame[3]==253){output.Write(frame,8,frame.Length-8);Interlocked.Increment(ref received);}}
+  byte[] first;var firstDeadline=DateTime.UtcNow.AddSeconds(15);do{if(DateTime.UtcNow>firstDeadline)throw new IOException();first=Packet();}while(first[3]!=252&&first[3]!=254);int codec=first[4];Demux=(codec==2||codec==18)?"h264":(codec==3||codec==19||codec==67||codec==83)?"hevc":null;if(Demux==null)throw new Exception("Nicht unterstütztes Kamera-Videoformat.");Fps=FrameRate(first[5]);listener=new TcpListener(IPAddress.Loopback,0);listener.Start();Url="tcp://127.0.0.1:"+((IPEndPoint)listener.LocalEndpoint).Port;ready.TrySetResult(this);viewer=listener.AcceptTcpClient();viewer.NoDelay=true;viewer.SendTimeout=10000;var output=viewer.GetStream();output.Write(first,16,first.Length-16);Interlocked.Add(ref received,first.Length-16);Interlocked.Increment(ref frameCount);
+  while(!closed){var frame=Packet();if(frame[3]==252||frame[3]==254){output.Write(frame,16,frame.Length-16);Interlocked.Add(ref received,frame.Length-16);Interlocked.Increment(ref frameCount);}else if(frame[3]==253){output.Write(frame,8,frame.Length-8);Interlocked.Add(ref received,frame.Length-8);Interlocked.Increment(ref frameCount);}}
  }catch(Exception){ready.TrySetException(new Exception("Direkter Kamera-Videokanal konnte nicht geöffnet werden oder wurde unterbrochen."));}finally{Dispose();}}
  public void Dispose(){closed=true;if(listener!=null)try{listener.Stop();}catch{}if(camera!=null)try{camera.Close();}catch{}if(viewer!=null)try{viewer.Close();}catch{}}
 }
@@ -317,11 +318,12 @@ public class VideoTile : Panel {
  Panel surface=new Panel {Dock=DockStyle.Fill,BackColor=Color.Black}; Label title=new Label {Dock=DockStyle.Top,Height=29,TextAlign=ContentAlignment.MiddleLeft,Padding=new Padding(8,0,0,0)};
  Label state=new Label {Dock=DockStyle.Bottom,Height=25,TextAlign=ContentAlignment.MiddleLeft,Padding=new Padding(8,0,0,0),ForeColor=Color.Silver};
  Label message=new Label {Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.Gray};
- System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer {Interval=1000}; IntPtr player,activeMedia; Camera camera; Settings settings; bool demo,closing,retiring,starting,native; DateTime since,retry; int failures; PlaybackHealth health;RawCameraSource raw;long previousInput;DateTime inputRateAt;double inputRate;
+ System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer {Interval=1000}; IntPtr player,activeMedia; Camera camera; Settings settings; bool demo,closing,retiring,starting,native; DateTime since,retry; int failures; PlaybackHealth health;RawCameraSource raw;long previousInput,previousFrames;int previousDisplayed;DateTime inputRateAt;double inputRate,inputFps,displayFps;
+ public bool HasCamera {get{return camera!=null;}}
  public int DisplayedFrames {get {Vlc.Stats stats;return activeMedia!=IntPtr.Zero && Vlc.libvlc_media_get_stats(activeMedia,out stats)?stats.Displayed:0;}}
  Queue<string> history=new Queue<string>();int loggedState=-1;DateTime logAt=DateTime.MinValue;
  void Log(string text){history.Enqueue(DateTime.Now.ToString("HH:mm:ss")+" "+text);while(history.Count>35)history.Dequeue();}
- public string Diagnostic(){return "SpielfeldTV 0.6 · Wiedergabediagnose\r\nKamera: "+camera.Host+":"+(native?camera.DvripPort:camera.Port)+"\r\nZugang: "+(native?"XM / DVR-IP":"RTSP")+"; Transport: "+(native||camera.Tcp?"TCP":"UDP")+"; Kamera-Bildrate: "+(raw==null?"unbekannt":raw.Fps.ToString())+"; Eingang gemessen: "+inputRate.ToString("0.0")+" B/s; Hardware: "+settings.Hardware+"; Puffer: "+settings.Cache+" ms\r\nStream-Pfad und Zugangsdaten sind ausgeblendet.\r\nStatus: "+state.Text+"\r\n"+String.Join("\r\n",history.ToArray());}
+ public string Diagnostic(){return "SpielfeldTV 0.7 · Wiedergabediagnose\r\nKamera: "+camera.Host+":"+(native?camera.DvripPort:camera.Port)+"\r\nZugang: "+(native?"XM / DVR-IP":"RTSP")+"; Transport: "+(native||camera.Tcp?"TCP":"UDP")+"; Kamera-Bildrate: "+(raw==null?"unbekannt":raw.Fps.ToString())+"; Eingang gemessen: "+(inputRate/1024).ToString("0.0")+" KiB/s; Eingang: "+inputFps.ToString("0.0")+" FPS; Anzeige: "+displayFps.ToString("0.0")+" FPS; Mehrkamera: "+settings.Multicam+"; Hardware: "+settings.Hardware+"; Puffer: "+settings.Cache+" ms\r\nStream-Pfad und Zugangsdaten sind ausgeblendet.\r\nStatus: "+state.Text+"\r\n"+String.Join("\r\n",history.ToArray());}
  public event EventHandler FocusRequested;
  public VideoTile(Camera c,Settings s,bool isDemo,int position) {
   camera=c;settings=s;demo=isDemo;Dock=DockStyle.Fill;Margin=new Padding(3);BackColor=UI.Card;
@@ -343,10 +345,11 @@ public class VideoTile : Panel {
   if(!Vlc.Init()){message.Text=Vlc.Failure;state.Text="VLC fehlt";timer.Stop();return;}
   IntPtr media=IntPtr.Zero;starting=true;
   try {
-   native=NativeBridge.Use(camera);string url;if(native){var source=await RawCameraSource.Open(camera);if(closing){source.Dispose();return;}raw=source;previousInput=0;inputRateAt=DateTime.UtcNow;url=source.Url;}else url=camera.Url();if(closing)return;
+   native=NativeBridge.Use(camera);string url;if(native){var source=await RawCameraSource.Open(camera);if(closing){source.Dispose();return;}raw=source;previousInput=previousFrames=0;previousDisplayed=0;inputRateAt=DateTime.UtcNow;url=source.Url;}else url=camera.Url();if(closing)return;
    media=Vlc.libvlc_media_new_location(Vlc.Instance,Vlc.Utf(url));if(media==IntPtr.Zero)throw new Exception();
    foreach(var option in new[]{native||camera.Tcp?":rtsp-tcp":":no-rtsp-tcp",":network-caching="+settings.Cache,":avcodec-hw="+(settings.Hardware?"any":"none"),":no-audio",":rtsp-timeout=5"}) Vlc.libvlc_media_add_option(media,Vlc.Utf(option));
    Vlc.libvlc_media_add_option(media,Vlc.Utf(":rtsp-frame-buffer-size=4000000"));
+   Vlc.libvlc_media_add_option(media,Vlc.Utf(":avcodec-threads="+(settings.Multicam?2:0)));Vlc.libvlc_media_add_option(media,Vlc.Utf(settings.Multicam?":drop-late-frames":":no-drop-late-frames"));
    if(raw!=null){Vlc.libvlc_media_add_option(media,Vlc.Utf(":demux="+raw.Demux));Vlc.libvlc_media_add_option(media,Vlc.Utf(":"+raw.Demux+"-fps="+raw.Fps));}
    player=Vlc.libvlc_media_player_new_from_media(media);if(player==IntPtr.Zero)throw new Exception();activeMedia=media;media=IntPtr.Zero;
    Vlc.libvlc_media_player_set_hwnd(player,surface.Handle);Vlc.libvlc_video_set_mouse_input(player,0);Vlc.libvlc_video_set_key_input(player,0);Vlc.libvlc_audio_set_mute(player,1);
@@ -362,16 +365,16 @@ public class VideoTile : Panel {
   if(player==IntPtr.Zero){if(DateTime.UtcNow>=retry && !retiring)StartVideo();return;}
   int current=Vlc.libvlc_media_player_get_state(player),frames=DisplayedFrames;var now=DateTime.UtcNow;
   if(current!=loggedState||(now-logAt).TotalSeconds>=5){Vlc.Stats stats;bool available=Vlc.libvlc_media_get_stats(activeMedia,out stats);Log("VLC="+current+" (0=Start,1=Öffnen,2=Puffern,3=Spielt,4=Pause,5=Gestoppt,6=Ende,7=Fehler)"+(available?"; Bytes="+stats.Read+"; decodiert="+stats.DecodedVideo+"; angezeigt="+stats.Displayed+"; verworfen="+stats.Lost:"; keine Videostatistik"));loggedState=current;logAt=now;}
-  if(raw!=null&&(now-inputRateAt).TotalSeconds>=4){long count=raw.Received;inputRate=(count-previousInput)/(now-inputRateAt).TotalSeconds;previousInput=count;inputRateAt=now;}string reason=health.Observe(current,frames,now);if(reason!=null){Fail(reason);return;}
+  if(raw!=null&&(now-inputRateAt).TotalSeconds>=4){long count=raw.Received;double elapsed=(now-inputRateAt).TotalSeconds;inputRate=(count-previousInput)/elapsed;long totalFrames=raw.Frames;inputFps=(totalFrames-previousFrames)/elapsed;displayFps=Math.Max(0,frames-previousDisplayed)/elapsed;previousFrames=totalFrames;previousDisplayed=frames;previousInput=count;inputRateAt=now;}string reason=health.Observe(current,frames,now);if(reason!=null){Fail(reason);return;}
   if(health.HadVideo)message.Visible=false;
-  if(current==3){double stalled=(now-health.LastVideo).TotalSeconds;state.Text=!health.HadVideo?"Warte auf Video …":stalled>3?"Bild stockt · seit "+(int)stalled+" s keine neuen Bilder":"Live · Ton aus · "+(native?"XM / DVR-IP · Eingang ~"+inputRate.ToString("0.0")+" B/s":camera.Tcp?"TCP":"UDP");state.ForeColor=stalled>3?Color.SandyBrown:UI.Accent;if((now-since).TotalSeconds>45&&stalled<3)failures=0;}
+  if(current==3){double stalled=(now-health.LastVideo).TotalSeconds;state.Text=!health.HadVideo?"Warte auf Video …":stalled>3?"Bild stockt · seit "+(int)stalled+" s keine neuen Bilder":"Live · Ton aus · "+(native?"XM · Eingang "+inputFps.ToString("0.0")+" / Anzeige "+displayFps.ToString("0.0")+" FPS":camera.Tcp?"TCP":"UDP");state.ForeColor=stalled>3?Color.SandyBrown:UI.Accent;if((now-since).TotalSeconds>45&&stalled<3)failures=0;}
   else {state.Text=current==2?"Puffert … · Verbindung bleibt bestehen":"Verbinde …";state.ForeColor=Color.Silver;}
  }
 }
 public class CameraForm : Form {
  public Camera Result; TextBox name=new TextBox(),host=new TextBox(),user=new TextBox(),password=new TextBox {UseSystemPasswordChar=true}; ComboBox path=new ComboBox {DropDownStyle=ComboBoxStyle.DropDown},backend=UI.Combo(); NumericUpDown port=new NumericUpDown {Minimum=1,Maximum=65535},dvrip=new NumericUpDown{Minimum=1,Maximum=65535}; CheckBox tcp=new CheckBox{Text="RTSP über TCP (sonst UDP)",AutoSize=true}; Settings settings; CancellationTokenSource workCancel; TextBox diagnosis=new TextBox{Dock=DockStyle.Bottom,Height=100,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Text="Automatisch nutzt für erkannte XM-Kameras den nativen DVR/IP-Zugang. Sonst RTSP."};
  public CameraForm(Camera c,Settings s) {
-  settings=s;Result=c.Copy();Text="Kamera einrichten · Version 0.6";Size=new Size(960,Math.Min(900,Screen.PrimaryScreen.WorkingArea.Height-45));MinimumSize=new Size(760,620);UI.Style(this);
+  settings=s;Result=c.Copy();Text="Kamera einrichten · Version 0.7";Size=new Size(960,Math.Min(900,Screen.PrimaryScreen.WorkingArea.Height-45));MinimumSize=new Size(760,620);UI.Style(this);
   var table=new TableLayoutPanel {Dock=DockStyle.Top,AutoSize=true,Padding=new Padding(18),ColumnCount=2};table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,190));table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
   path.Items.AddRange(new object[]{"/onvif1","/onvif2","/1","/2","/user={user}_password={password}_channel=0_stream=1.sdp?"});
   backend.Items.AddRange(new object[]{"Automatisch","RTSP direkt","XM / VMS (DVR/IP)"});backend.SelectedIndex=c.Backend=="XM"?2:c.Backend=="RTSP"?1:0;
@@ -390,10 +393,11 @@ public class CameraForm : Form {
 }
 public class PreviewForm : Form {
  Panel area=new Panel{Dock=DockStyle.Fill};Camera camera;Settings options;CheckBox software=new CheckBox{Text="Ohne Hardwaredecodierung testen",AutoSize=true,Margin=new Padding(8,12,8,8)},tcp=new CheckBox{Text="TCP",AutoSize=true,Margin=new Padding(8,12,8,8)};
- public PreviewForm(Camera c,Settings s) {camera=c;options=new Settings{Cache=s.Cache,Hardware=s.Hardware};Text="Verbindungsprüfung · "+c.Name;Size=new Size(1040,660);UI.Style(this);var bar=UI.Bar();software.Checked=!s.Hardware;tcp.Checked=c.Tcp;bar.Controls.Add(software);bar.Controls.Add(tcp);bar.Controls.Add(UI.Button("Diagnose kopieren",(a,b)=>{var tile=area.Controls.OfType<VideoTile>().FirstOrDefault();if(tile!=null){try{Clipboard.SetText(tile.Diagnostic());MessageBox.Show("Diagnose kopiert. Hier im Chat einfügen. Stream-Adresse und Zugangsdaten sind ausgeblendet.","Wiedergabediagnose");}catch(Exception ex){UI.Error(ex);}}}));bar.Controls.Add(UI.Label("Bei schwarzem Bild Modus wechseln. Dauerhaft: Start & Wiedergabe."));software.CheckedChanged+=(a,b)=>Restart();tcp.CheckedChanged+=(a,b)=>Restart();Controls.Add(area);Controls.Add(bar);Restart();}
+ public PreviewForm(Camera c,Settings s) {camera=c;options=new Settings{Cache=s.Cache,Hardware=s.Hardware,Multicam=s.Multicam};Text="Verbindungsprüfung · "+c.Name;Size=new Size(1040,660);UI.Style(this);var bar=UI.Bar();software.Checked=!s.Hardware;tcp.Checked=c.Tcp;bar.Controls.Add(software);bar.Controls.Add(tcp);bar.Controls.Add(UI.Button("Diagnose kopieren",(a,b)=>{var tile=area.Controls.OfType<VideoTile>().FirstOrDefault();if(tile!=null){try{Clipboard.SetText(tile.Diagnostic());MessageBox.Show("Diagnose kopiert. Hier im Chat einfügen. Stream-Adresse und Zugangsdaten sind ausgeblendet.","Wiedergabediagnose");}catch(Exception ex){UI.Error(ex);}}}));bar.Controls.Add(UI.Label("Bei schwarzem Bild Modus wechseln. Dauerhaft: Start & Wiedergabe."));software.CheckedChanged+=(a,b)=>Restart();tcp.CheckedChanged+=(a,b)=>Restart();Controls.Add(area);Controls.Add(bar);Restart();}
  void Restart(){foreach(Control child in area.Controls.Cast<Control>().ToArray())child.Dispose();options.Hardware=!software.Checked;camera.Tcp=tcp.Checked;area.Controls.Add(new VideoTile(camera,options,false,1));}
 }
 public class DisplayForm : Form {
+ public string Diagnostics(){return String.Join("\r\n\r\n",tiles.Where(t=>t.HasCamera).Select(t=>t.Diagnostic()));}
  TabControl tabs=new TabControl {Dock=DockStyle.Fill}; Settings settings; bool demo; TableLayoutPanel table; List<VideoTile> tiles=new List<VideoTile>(); VideoTile focused; Dictionary<VideoTile,TableLayoutPanelCellPosition> positions=new Dictionary<VideoTile,TableLayoutPanelCellPosition>(); List<ViewPage> pages; string screenName;
  public DisplayForm(Settings s,Screen screen,List<ViewPage> views,bool isDemo) {
   settings=s;demo=isDemo;pages=views;screenName=screen.DeviceName;Text="SpielfeldTV · "+screen.DeviceName;UI.Style(this);FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;Bounds=screen.Bounds;KeyPreview=true;TopMost=false;
@@ -425,7 +429,7 @@ public class Choice {public string Id,Name;public override string ToString(){ret
 public partial class MainForm : Form {
  Settings settings; DataGridView cameras=UI.Grid(); ListBox pages=new ListBox {Dock=DockStyle.Fill,BackColor=UI.Card,ForeColor=UI.Ink,BorderStyle=BorderStyle.None,ItemHeight=30}; ComboBox monitor=UI.Combo(); NumericUpDown rows=new NumericUpDown {Minimum=1,Maximum=5,Width=65},cols=new NumericUpDown {Minimum=1,Maximum=5,Width=65},cache=new NumericUpDown {Minimum=100,Maximum=3000,Increment=100,Width=90}; TextBox pageName=new TextBox {Width=180};TableLayoutPanel slots=new TableLayoutPanel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(8)};CheckBox auto=new CheckBox {Text="Gespeicherte Zuschauerfenster beim Programmstart öffnen",AutoSize=true},hw=new CheckBox {Text="Hardwaredecodierung verwenden",AutoSize=true};Label info=UI.Label("");List<DisplayForm> displays=new List<DisplayForm>();bool loading;
  public MainForm(Settings s) {
-  settings=s;DisplayConfigNames.Resolve(settings);Text="SpielfeldTV 0.6 · Verwaltung";Size=new Size(1240,830);MinimumSize=new Size(1050,690);UI.Style(this);
+  settings=s;DisplayConfigNames.Resolve(settings);Text="SpielfeldTV 0.7 · Verwaltung";Size=new Size(1240,830);MinimumSize=new Size(1050,690);UI.Style(this);
   var header=UI.Bar();header.Padding=new Padding(18);header.Controls.Add(new Label {Text="SPIELFELD TV",Font=new Font("Segoe UI",20,FontStyle.Bold),ForeColor=UI.Accent,AutoSize=true,Margin=new Padding(0,0,25,0)});header.Controls.Add(UI.Button("Zuschaueranzeigen starten",(a,b)=>Launch(false)));header.Controls.Add(UI.Button("Demo ansehen",(a,b)=>Launch(true)));header.Controls.Add(UI.Button("Anzeigen schließen",(a,b)=>CloseDisplays()));header.Controls.Add(UI.Button("Alles speichern",(a,b)=>Save()));
   var tab=new TabControl {Dock=DockStyle.Fill};var ct=new TabPage("1  Kameras hinzufügen");var lt=new TabPage("2  Raster & Tabs");var st=new TabPage("3  Start & Wiedergabe");foreach(var t in new[]{ct,lt,st}){t.BackColor=UI.Bg;t.ForeColor=UI.Ink;tab.TabPages.Add(t);}
   cameras.Columns.Add("name","Kamera / Spielfeld");cameras.Columns.Add("ip","IP-Adresse");cameras.Columns.Add("port","Port");cameras.Columns.Add("path","Stream-Pfad");cameras.CellDoubleClick+=(a,b)=>EditCamera();
@@ -514,7 +518,7 @@ public static class Tests {
  public static int Run(string[] args){try {
   Assert(RawCameraSource.FrameRate(84)==20&&RawCameraSource.FrameRate(20)==20&&RawCameraSource.FrameRate(12)==12,"Kamera-Bildrate mit Markierungsbits korrekt auswerten");
   var clock=DateTime.UtcNow;var watch=new PlaybackHealth(clock);Assert(watch.Observe(3,100,clock.AddSeconds(25))==null,"Erstes Videobild");Assert(watch.Observe(2,100,clock.AddSeconds(26))==null,"Pufferpause nach langer Wiedergabe darf nicht sofort abbrechen");Assert(watch.Observe(3,120,clock.AddSeconds(29))==null,"Wiedergabe nach Pufferpause");Assert(watch.Observe(3,120,clock.AddSeconds(35))==null,"Kurzer Stillstand toleriert");Assert(watch.Observe(3,120,clock.AddSeconds(75))!=null,"Dauerhafter Bildstillstand wird erkannt");var buffering=new PlaybackHealth(clock);buffering.Observe(2,0,clock);Assert(buffering.Observe(2,0,clock.AddSeconds(31))!=null,"Dauerhaftes Puffern wird erkannt");Console.WriteLine("PASS: buffering recovery and stalled-video watchdog regression.");
-  FeatureTests.Run();Task.Run(()=>Protocols()).GetAwaiter().GetResult();var s=Settings.Defaults();var c=new Camera {Name="Test",Host="192.168.1.20",User="a@b",Password="p:#?&"};c.Validate();s.Cameras.Add(c);s.Pages[0].Slots[0]=c.Id;
+  PacketTests.Run();FeatureTests.Run();Task.Run(()=>Protocols()).GetAwaiter().GetResult();var s=Settings.Defaults();var c=new Camera {Name="Test",Host="192.168.1.20",User="a@b",Password="p:#?&"};c.Validate();s.Cameras.Add(c);s.Pages[0].Slots[0]=c.Id;
   var encrypted=Store.Encode(s);Assert(!Encoding.UTF8.GetString(encrypted).Contains("p:#?&"),"Passwortschutz");var restored=Store.Decode(encrypted);Assert(restored.Cameras[0].Password==c.Password && restored.Pages[0].Slots[0]==c.Id,"Persistenz");
   Assert(new Uri(c.Url()).Host==c.Host && c.Url().Contains("p%3A%23%3F%26"),"URL-Escaping");
   bool invalid=false;try{Search.Number("300.1.2.3");}catch(Exception){invalid=true;}Assert(invalid,"IPv4-Validierung");Assert(Search.Address(Search.Number("192.168.4.254"))=="192.168.4.254","IP-Konvertierung");
@@ -531,6 +535,8 @@ public static class Tests {
  }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}}
 }
 }
+
+
 
 
 
