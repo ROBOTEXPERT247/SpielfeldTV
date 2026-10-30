@@ -47,7 +47,7 @@ public static class FeatureTests {
 }
 namespace SpielfeldTV {
 public class UpdateCenter:Form {
- const string Repo="ROBOTEXPERT247/SpielfeldTV"; public const string Current="0.8.0";
+ const string Repo="ROBOTEXPERT247/SpielfeldTV"; public const string Current="0.8.1";
  Label status=UI.Label("Installiert: "+Current);TextBox notes=new TextBox{Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=UI.Card,ForeColor=UI.Ink};Button install;Dictionary<string,object> asset;MainForm owner;
  public UpdateCenter(MainForm main){owner=main;Text="GitHub Update-Center · SpielfeldTV";Size=new Size(760,530);UI.Style(this);var top=UI.Bar();top.Controls.Add(status);top.Controls.Add(UI.Button("Nach Updates suchen",async(a,b)=>await Check()));install=UI.Button("Update laden und installieren",async(a,b)=>await Install());install.Enabled=false;var bottom=UI.Bar();bottom.Dock=DockStyle.Bottom;bottom.Controls.Add(install);bottom.Controls.Add(UI.Button("Releases auf GitHub",(a,b)=>System.Diagnostics.Process.Start("https://github.com/"+Repo+"/releases")));Controls.Add(notes);Controls.Add(top);Controls.Add(bottom);Shown+=async(a,b)=>await Check();}
  static WebClient Client(){ServicePointManager.SecurityProtocol|=SecurityProtocolType.Tls12;var w=new WebClient();w.Headers["User-Agent"]="SpielfeldTV/"+Current;w.Headers["Accept"]="application/vnd.github+json";return w;}
@@ -112,4 +112,5 @@ public static class ViewerTitles {
  public static void Set(Settings s,string screen,string title){Ensure(s);var c=s.ViewerCaptions.FirstOrDefault(x=>x.Screen==screen);if(c==null){c=new ViewerCaption{Screen=screen,ScreenKey=DisplayConfigNames.Key(screen)};s.ViewerCaptions.Add(c);}c.Title=title;}
 }
 }
+
 

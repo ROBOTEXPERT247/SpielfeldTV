@@ -1,6 +1,6 @@
 param([switch]$FullSetup)
 $ErrorActionPreference='Stop'
-$version='0.8.0'
+$version='0.8.1'
 $root=$PSScriptRoot
 $build=Join-Path $root 'build'
 $stage=Join-Path $build 'payload\SpielfeldTV'
@@ -34,6 +34,7 @@ if($FullSetup){
  if($LASTEXITCODE){throw 'Setup build failed'}
 }
 Get-ChildItem $build -Filter "SpielfeldTV-*-$version.exe" | ForEach-Object { $hash=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant();Set-Content ($_.FullName+'.sha256') ($hash+'  '+$_.Name) -Encoding ascii }
+
 
 
 
