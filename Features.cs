@@ -47,7 +47,7 @@ public static class FeatureTests {
 }
 namespace SpielfeldTV {
 public class UpdateCenter:Form {
- const string Repo="ROBOTEXPERT247/SpielfeldTV"; public const string Current="0.8.1";
+ const string Repo="ROBOTEXPERT247/SpielfeldTV"; public const string Current="0.8.2";
  Label status=UI.Label("Installiert: "+Current);TextBox notes=new TextBox{Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,BackColor=UI.Card,ForeColor=UI.Ink};Button install;Dictionary<string,object> asset;MainForm owner;
  public UpdateCenter(MainForm main){owner=main;Text="GitHub Update-Center · SpielfeldTV";Size=new Size(760,530);UI.Style(this);var top=UI.Bar();top.Controls.Add(status);top.Controls.Add(UI.Button("Nach Updates suchen",async(a,b)=>await Check()));install=UI.Button("Update laden und installieren",async(a,b)=>await Install());install.Enabled=false;var bottom=UI.Bar();bottom.Dock=DockStyle.Bottom;bottom.Controls.Add(install);bottom.Controls.Add(UI.Button("Releases auf GitHub",(a,b)=>System.Diagnostics.Process.Start("https://github.com/"+Repo+"/releases")));Controls.Add(notes);Controls.Add(top);Controls.Add(bottom);Shown+=async(a,b)=>await Check();}
  static WebClient Client(){ServicePointManager.SecurityProtocol|=SecurityProtocolType.Tls12;var w=new WebClient();w.Headers["User-Agent"]="SpielfeldTV/"+Current;w.Headers["Accept"]="application/vnd.github+json";return w;}
@@ -112,5 +112,17 @@ public static class ViewerTitles {
  public static void Set(Settings s,string screen,string title){Ensure(s);var c=s.ViewerCaptions.FirstOrDefault(x=>x.Screen==screen);if(c==null){c=new ViewerCaption{Screen=screen,ScreenKey=DisplayConfigNames.Key(screen)};s.ViewerCaptions.Add(c);}c.Title=title;}
 }
 }
+
+
+namespace SpielfeldTV {
+public sealed class BrandStandby : Control {
+ public static readonly Color Green=Color.FromArgb(19,27,20);
+ static readonly Lazy<Bitmap> artwork=new Lazy<Bitmap>(()=>{var stream=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("branding.logo");if(stream==null){string file=System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Bunker73-logo.png");if(System.IO.File.Exists(file))stream=System.IO.File.OpenRead(file);}if(stream==null)return null;using(stream)using(var image=Image.FromStream(stream))return new Bitmap(image);});
+ public static bool HasLogo {get{return artwork.Value!=null;}}
+ public BrandStandby(){Dock=DockStyle.Fill;BackColor=Green;Margin=Padding.Empty;TabStop=false;Visible=false;SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);}
+ protected override void OnPaint(PaintEventArgs e){e.Graphics.Clear(Green);var logo=artwork.Value;if(logo==null||Width<1||Height<1)return;float scale=Math.Min(Width*.60f/logo.Width,Height*.60f/logo.Height);int w=(int)(logo.Width*scale),h=(int)(logo.Height*scale);e.Graphics.InterpolationMode=System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;e.Graphics.PixelOffsetMode=System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;float saturation=.18f,brightness=.92f,red=(1-saturation)*.2126f,green=(1-saturation)*.7152f,blue=(1-saturation)*.0722f;var matrix=new System.Drawing.Imaging.ColorMatrix(new[]{new[]{(red+saturation)*brightness,red*brightness,red*brightness,0f,0f},new[]{green*brightness,(green+saturation)*brightness,green*brightness,0f,0f},new[]{blue*brightness,blue*brightness,(blue+saturation)*brightness,0f,0f},new[]{0f,0f,0f,.33f,0f},new[]{0f,0f,0f,0f,1f}});using(var attributes=new System.Drawing.Imaging.ImageAttributes()){attributes.SetColorMatrix(matrix);e.Graphics.DrawImage(logo,new Rectangle((Width-w)/2,(Height-h)/2,w,h),0,0,logo.Width,logo.Height,GraphicsUnit.Pixel,attributes);}}
+}
+}
+
 
 

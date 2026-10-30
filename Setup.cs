@@ -11,7 +11,7 @@ using System.Windows.Forms;
 class Setup : Form {
  static bool Patch {get{return Assembly.GetExecutingAssembly().GetManifestResourceNames().Contains("patch.flag");}}
  TextBox folder=new TextBox {Dock=DockStyle.Fill};Label status=new Label {Dock=DockStyle.Fill,AutoSize=false};ProgressBar progress=new ProgressBar {Dock=DockStyle.Bottom,Height=24};Button install=new Button {Text="Installieren / Aktualisieren",AutoSize=true,Padding=new Padding(12)};CheckBox shortcut=new CheckBox {Text="Verknüpfung auf dem Desktop anlegen",Checked=true,AutoSize=true};bool busy;
- public Setup(string selectedTarget){Text="SpielfeldTV "+(Patch?"Update":"Setup")+" · Installer 0.8.1";Font=new Font("Segoe UI",10);Size=new Size(820,520);MinimumSize=Size;StartPosition=FormStartPosition.CenterScreen;
+ public Setup(string selectedTarget){Text="SpielfeldTV "+(Patch?"Update":"Setup")+" · Installer 0.8.2";Font=new Font("Segoe UI",10);Size=new Size(820,520);MinimumSize=Size;StartPosition=FormStartPosition.CenterScreen;
   var panel=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(24),ColumnCount=2,RowCount=6};panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,120));
   var title=new Label {Text="SpielfeldTV installieren oder aktualisieren",AutoSize=true,Font=new Font("Segoe UI",17,FontStyle.Bold)};panel.Controls.Add(title,0,0);panel.SetColumnSpan(title,2);
   var info=new Label {Text="Kein ZIP-Entpacken nötig. Kameraeinstellungen bleiben erhalten.\nBitte die laufende SpielfeldTV-Anwendung vor dem Update schließen.",AutoSize=true,Padding=new Padding(0,14,0,14)};panel.Controls.Add(info,0,1);panel.SetColumnSpan(info,2);
@@ -52,5 +52,6 @@ class Setup : Form {
  if(args.Length==2&&args[0]=="--test-install"){try{Extract(args[1],new ProgressProxy(n=>{}));Console.WriteLine("PASS: self-extracting setup installation.");return 0;}catch(Exception ex){Console.Error.WriteLine(ex);return 1;}}
  Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);Application.Run(new Setup(selectedTarget));return 0;}
 }
+
 
 

@@ -1,6 +1,6 @@
 param([switch]$FullSetup)
 $ErrorActionPreference='Stop'
-$version='0.8.1'
+$version='0.8.2'
 $root=$PSScriptRoot
 $build=Join-Path $root 'build'
 $stage=Join-Path $build 'payload\SpielfeldTV'
@@ -11,9 +11,9 @@ if(Test-Path $stage){
 }
 New-Item -ItemType Directory -Force $stage | Out-Null
 $csc=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-& $csc /nologo /target:winexe /platform:x64 /optimize+ "/win32manifest:$root\SpielfeldTV.exe.manifest" "/out:$stage\SpielfeldTV.exe" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Xml.Linq.dll /reference:System.Security.dll /reference:System.Web.Extensions.dll "$root\SpielfeldTV.cs" "$root\Features.cs"
+& $csc /nologo /target:winexe /platform:x64 /optimize+ "/win32manifest:$root\SpielfeldTV.exe.manifest" "/out:$stage\SpielfeldTV.exe" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Xml.Linq.dll /reference:System.Security.dll /reference:System.Web.Extensions.dll "/resource:$root\Bunker73-logo.png,branding.logo" "$root\SpielfeldTV.cs" "$root\Features.cs"
 if($LASTEXITCODE){throw 'App build failed'}
-Copy-Item "$root\SpielfeldTV.exe.config","$root\LICENSE" $stage -Force
+Copy-Item "$root\SpielfeldTV.exe.config","$root\LICENSE","$root\BRANDING.txt" $stage -Force
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip=Join-Path $build 'update.zip'
 if(Test-Path $zip){Remove-Item -LiteralPath $zip}
@@ -34,6 +34,7 @@ if($FullSetup){
  if($LASTEXITCODE){throw 'Setup build failed'}
 }
 Get-ChildItem $build -Filter "SpielfeldTV-*-$version.exe" | ForEach-Object { $hash=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant();Set-Content ($_.FullName+'.sha256') ($hash+'  '+$_.Name) -Encoding ascii }
+
 
 
 

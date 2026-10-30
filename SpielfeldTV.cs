@@ -319,6 +319,7 @@ public class PlaybackHealth {
  }
 }
 public class VideoTile : Panel {
+ BrandStandby standby=new BrandStandby();bool audienceIdle,idleInitialized;
  Panel surface=new Panel {Dock=DockStyle.Fill,BackColor=Color.Black}; Label title=new Label {Dock=DockStyle.Top,Height=29,TextAlign=ContentAlignment.MiddleLeft,Padding=new Padding(8,0,0,0)};
  Label state=new Label {Dock=DockStyle.Bottom,Height=25,TextAlign=ContentAlignment.MiddleLeft,Padding=new Padding(8,0,0,0),ForeColor=Color.Silver};
  Label message=new Label {Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.Gray};
@@ -335,13 +336,15 @@ public class VideoTile : Panel {
   title.Text=c==null?"Platz "+position+" · nicht belegt":c.Name;title.ForeColor=UI.Ink;
   surface.Controls.Add(message);Controls.Add(surface);Controls.Add(state);Controls.Add(title);
   if(audience){Margin=new Padding(2);Padding=new Padding(1);BackColor=Color.FromArgb(51,63,44);state.Visible=false;title.Dock=DockStyle.Bottom;title.Height=40;title.Padding=new Padding(13,0,12,0);title.Font=new Font("Segoe UI",12,FontStyle.Regular);title.BackColor=Color.FromArgb(19,27,20);title.ForeColor=Color.FromArgb(230,235,219);title.AutoEllipsis=true;title.UseMnemonic=false;message.Font=new Font("Segoe UI",11);message.ForeColor=Color.FromArgb(150,159,172);if(c==null&&!demo){title.Visible=false;message.Visible=false;}if(c==null&&demo)title.Text="Kamera "+position;}
+  if(audience){Controls.Add(standby);SetAudienceIdle(c==null);}
   title.DoubleClick+=Focus;surface.DoubleClick+=Focus;message.DoubleClick+=Focus;
   timer.Tick+=(a,b)=>Tick();
   HandleCreated+=(a,b)=>{if(c!=null || demo) { retry=DateTime.UtcNow.AddMilliseconds(position*120);timer.Start();}else {message.Text=audience?"":"Kamera in der Verwaltung zuweisen";state.Text="Frei";}};
   Disposed+=(a,b)=>{closing=true;timer.Stop();timer.Dispose();Retire();};
  }
- public void AttachViewerMenu(ContextMenuStrip menu){ContextMenuStrip=surface.ContextMenuStrip=title.ContextMenuStrip=message.ContextMenuStrip=menu;}
- void Focus(object s,EventArgs e) {if(audience&&camera==null&&!demo)return;if(FocusRequested!=null)FocusRequested(this,EventArgs.Empty);}
+ public void AttachViewerMenu(ContextMenuStrip menu){ContextMenuStrip=surface.ContextMenuStrip=title.ContextMenuStrip=message.ContextMenuStrip=standby.ContextMenuStrip=menu;}
+ void SetAudienceIdle(bool idle){if(!audience||(idleInitialized&&audienceIdle==idle))return;idleInitialized=true;audienceIdle=idle;SuspendLayout();if(idle){Padding=Padding.Empty;BackColor=BrandStandby.Green;title.Visible=false;surface.Visible=false;standby.Visible=true;standby.BringToFront();}else{Padding=new Padding(1);BackColor=Color.FromArgb(51,63,44);standby.Visible=false;title.Visible=camera!=null||demo;surface.Visible=true;if(!demo)message.Visible=false;}ResumeLayout();Invalidate();}
+ void Focus(object s,EventArgs e) {if(audience&&(audienceIdle||(camera==null&&!demo)))return;if(FocusRequested!=null)FocusRequested(this,EventArgs.Empty);}
  async void Retire() {
   if(raw!=null){raw.Dispose();raw=null;}
   var old=player;var oldMedia=activeMedia;player=activeMedia=IntPtr.Zero;if(old==IntPtr.Zero)return;retiring=true;
@@ -406,9 +409,9 @@ public class PreviewForm : Form {
  void Restart(){foreach(Control child in area.Controls.Cast<Control>().ToArray())child.Dispose();options.Hardware=!software.Checked;camera.Tcp=tcp.Checked;area.Controls.Add(new VideoTile(camera,options,false,1));}
 }
 public class DisplayForm : Form {
- Settings settings;bool demo;TableLayoutPanel table;List<VideoTile> tiles=new List<VideoTile>();VideoTile focused;Dictionary<VideoTile,TableLayoutPanelCellPosition> positions=new Dictionary<VideoTile,TableLayoutPanelCellPosition>();List<ViewPage> pages;string screenName;int pageIndex;Panel canvas=new Panel{Dock=DockStyle.Fill,BackColor=Color.FromArgb(6,10,7),Padding=new Padding(5)};ContextMenuStrip menu=new ContextMenuStrip();
+ Settings settings;bool demo;TableLayoutPanel table;List<VideoTile> tiles=new List<VideoTile>();VideoTile focused;Dictionary<VideoTile,TableLayoutPanelCellPosition> positions=new Dictionary<VideoTile,TableLayoutPanelCellPosition>();List<ViewPage> pages;string screenName;int pageIndex;Panel canvas=new Panel{Dock=DockStyle.Fill,BackColor=BrandStandby.Green,Padding=new Padding(5)};ContextMenuStrip menu=new ContextMenuStrip();
  public string Diagnostics(){return String.Join("\r\n\r\n",tiles.Where(t=>t.HasCamera).Select(t=>t.Diagnostic()));}
- public DisplayForm(Settings s,Screen screen,List<ViewPage> views,bool isDemo){settings=s;demo=isDemo;pages=views;screenName=screen.DeviceName;Text="SpielfeldTV · "+screen.DeviceName;UI.Style(this);BackColor=Color.FromArgb(6,10,7);FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;Bounds=screen.Bounds;KeyPreview=true;Controls.Add(canvas);var heading=new Label{Text=ViewerTitles.Get(s,screenName).ToUpperInvariant(),Dock=DockStyle.Top,Height=90,Padding=new Padding(18,0,18,0),TextAlign=ContentAlignment.MiddleCenter,AutoEllipsis=true,UseMnemonic=false,ForeColor=Color.FromArgb(230,235,219),BackColor=Color.FromArgb(19,27,20),Font=new Font("Consolas",30,FontStyle.Bold),AccessibleName="Spielfeld-Überschrift"};heading.Paint+=(a,b)=>{using(var pen=new Pen(Color.FromArgb(104,119,80),2))b.Graphics.DrawLine(pen,0,heading.Height-1,heading.Width,heading.Height-1);};Controls.Add(heading);ContextMenuStrip=menu;canvas.ContextMenuStrip=menu;menu.Opening+=(a,b)=>{BuildMenu();b.Cancel=false;};int saved=pages.FindIndex(p=>settings.ActivePages.Contains(screenName+"|"+p.Name));pageIndex=Math.Max(0,saved);Shown+=(a,b)=>LoadPage();FormClosed+=(a,b)=>{ClearTiles();menu.Dispose();};KeyDown+=(a,b)=>{if(b.KeyCode==Keys.Escape){if(focused!=null)FocusTile(focused);else Close();b.Handled=true;}else if(b.KeyCode==Keys.F11){ToggleFull();b.Handled=true;}else if(b.KeyCode==Keys.PageDown||(b.Control&&b.KeyCode==Keys.Tab)){SelectView((pageIndex+(b.Shift?-1:1)+pages.Count)%pages.Count);b.SuppressKeyPress=true;}else if(b.KeyCode==Keys.PageUp){SelectView((pageIndex-1+pages.Count)%pages.Count);b.SuppressKeyPress=true;}};}
+ public DisplayForm(Settings s,Screen screen,List<ViewPage> views,bool isDemo){settings=s;demo=isDemo;pages=views;screenName=screen.DeviceName;Text="SpielfeldTV · "+screen.DeviceName;UI.Style(this);BackColor=BrandStandby.Green;FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;Bounds=screen.Bounds;KeyPreview=true;Controls.Add(canvas);var heading=new Label{Text=ViewerTitles.Get(s,screenName).ToUpperInvariant(),Dock=DockStyle.Top,Height=90,Padding=new Padding(18,0,18,0),TextAlign=ContentAlignment.MiddleCenter,AutoEllipsis=true,UseMnemonic=false,ForeColor=Color.FromArgb(230,235,219),BackColor=Color.FromArgb(19,27,20),Font=new Font("Consolas",30,FontStyle.Bold),AccessibleName="Spielfeld-Überschrift"};heading.Paint+=(a,b)=>{using(var pen=new Pen(Color.FromArgb(104,119,80),2))b.Graphics.DrawLine(pen,0,heading.Height-1,heading.Width,heading.Height-1);};Controls.Add(heading);ContextMenuStrip=menu;canvas.ContextMenuStrip=menu;menu.Opening+=(a,b)=>{BuildMenu();b.Cancel=false;};int saved=pages.FindIndex(p=>settings.ActivePages.Contains(screenName+"|"+p.Name));pageIndex=Math.Max(0,saved);Shown+=(a,b)=>LoadPage();FormClosed+=(a,b)=>{ClearTiles();menu.Dispose();};KeyDown+=(a,b)=>{if(b.KeyCode==Keys.Escape){if(focused!=null)FocusTile(focused);else Close();b.Handled=true;}else if(b.KeyCode==Keys.F11){ToggleFull();b.Handled=true;}else if(b.KeyCode==Keys.PageDown||(b.Control&&b.KeyCode==Keys.Tab)){SelectView((pageIndex+(b.Shift?-1:1)+pages.Count)%pages.Count);b.SuppressKeyPress=true;}else if(b.KeyCode==Keys.PageUp){SelectView((pageIndex-1+pages.Count)%pages.Count);b.SuppressKeyPress=true;}};}
  void BuildMenu(){foreach(ToolStripItem item in menu.Items.Cast<ToolStripItem>().ToArray())item.Dispose();menu.Items.Clear();if(pages.Count>1){var views=new ToolStripMenuItem("Ansicht wechseln");for(int i=0;i<pages.Count;i++){int index=i;var item=new ToolStripMenuItem(pages[i].Name){Checked=i==pageIndex};item.Click+=(a,b)=>SelectView(index);views.DropDownItems.Add(item);}menu.Items.Add(views);menu.Items.Add(new ToolStripSeparator());}var raster=new ToolStripMenuItem("Zur Rasteransicht"){Enabled=focused!=null};raster.Click+=(a,b)=>{if(focused!=null)FocusTile(focused);};menu.Items.Add(raster);menu.Items.Add("Vollbild / Fenster  ·  F11",null,(a,b)=>ToggleFull());menu.Items.Add("Zuschaueranzeige schließen",null,(a,b)=>Close());}
  public void SelectView(int index){if(index<0||index>=pages.Count)return;pageIndex=index;LoadPage();}
  void ToggleFull(){if(FormBorderStyle==FormBorderStyle.None){FormBorderStyle=FormBorderStyle.Sizable;Bounds=Screen.FromControl(this).WorkingArea;}else{FormBorderStyle=FormBorderStyle.None;Bounds=Screen.FromControl(this).Bounds;}}
@@ -455,13 +458,13 @@ public partial class MainForm : Form {
  }
  bool Save(){try{CommitPage();settings.AutoOpen=auto.Checked;settings.Hardware=hw.Checked;settings.Cache=(int)cache.Value;Store.Save(settings);info.Text="Gespeichert · "+settings.Cameras.Count+" Kameras · "+DateTime.Now.ToString("HH:mm:ss");return true;}catch(Exception ex){UI.Error(ex);return false;}}
  void CloseDisplays(){foreach(var d in displays.ToArray())if(!d.IsDisposed)d.Close();displays.Clear();}
- async void Launch(bool demo){if(launching||!Save())return;launching=true;UseWaitCursor=true;info.Text="Zuschaueranzeigen werden vorbereitet …";try{if(!demo){bool available=await Vlc.InitAsync();if(IsDisposed||Disposing)return;if(!available){MessageBox.Show(Vlc.Failure,"VLC erforderlich");return;}}if(IsDisposed||Disposing)return;
+ async void Launch(bool demo){if(launching||!Save())return;launching=true;UseWaitCursor=true;info.Text="Zuschaueranzeigen werden vorbereitet …";try{bool hasVideo=settings.Pages.Any(p=>p.Slots.Take(p.Rows*p.Columns).Any(id=>settings.Cameras.Any(c=>c.Id==id)));if(!demo&&hasVideo){bool available=await Vlc.InitAsync();if(IsDisposed||Disposing)return;if(!available){MessageBox.Show(Vlc.Failure,"VLC erforderlich");return;}}if(IsDisposed||Disposing)return;
   var screens=Screen.AllScreens;var missing=settings.Pages.Where(p=>!settings.DisabledScreens.Contains(p.Screen)&&!screens.Any(sc=>sc.DeviceName==p.Screen)).ToList();
   if(missing.Count>0){MessageBox.Show("Bildschirm für diese Tabs bitte neu auswählen: "+String.Join(", ",missing.Select(p=>p.Name)),"Bildschirm fehlt");return;}
   var groups=settings.Pages.Where(p=>!settings.DisabledScreens.Contains(p.Screen)).GroupBy(p=>p.Screen).ToList();if(groups.Count>3){MessageBox.Show("Bitte höchstens drei Bildschirme zuweisen.");return;}
   if(settings.Pages.Any(p=>String.IsNullOrWhiteSpace(p.Name))){MessageBox.Show("Bitte jedem Tab einen Namen geben.");return;}
   if(settings.Pages.GroupBy(p=>p.Screen+"|"+p.Name).Any(g=>g.Count()>1)){MessageBox.Show("Tabs am selben Bildschirm benötigen unterschiedliche Namen.");return;}
-  if(!demo && !settings.Pages.Any(p=>p.Slots.Take(p.Rows*p.Columns).Any(id=>settings.Cameras.Any(c=>c.Id==id)))){MessageBox.Show("Zuerst Kameras hinzufügen und im Raster zuweisen. Ohne Kameras kannst du die Demo öffnen.");return;}
+
   CloseDisplays();foreach(var group in groups){var screen=screens.First(sc=>sc.DeviceName==group.Key);var f=new DisplayForm(settings,screen,group.ToList(),demo);displays.Add(f);f.Show();await Task.Yield();if(IsDisposed||Disposing)return;}Store.Save(settings);info.Text="Zuschaueranzeigen geöffnet · Kameras verbinden sich im Hintergrund.";}catch(Exception ex){if(!IsDisposed)UI.Error(ex);}finally{launching=false;if(!IsDisposed)UseWaitCursor=false;}
  }
 }
@@ -526,6 +529,9 @@ public static class Tests {
  }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}}
 }
 }
+
+
+
 
 
 

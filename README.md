@@ -2,7 +2,9 @@
 
 Windows-Anwendung für lokale IP-Kameras auf bis zu drei Bildschirmen, mit frei belegbaren Rastern und Ansichten.
 
-## Version 0.8.1
+## Version 0.8.2
+
+Leere, nicht zugewiesene Kameraplätze zeigen eine durchgehende grüne Fläche mit mittigem, freigestelltem Bunker-73-Logo als dezentes, entsättigtes Wasserzeichen. Keine Rahmen, Kameranamen oder Statusmeldungen auf leeren Plätzen. Zugewiesene Kameras behalten auch bei einem Ausfall ihre normale Kachel; dort erscheint kein Logo. Das Logo ist in der Anwendung eingebettet. Hinweise zu den Rechten am Logo stehen in BRANDING.txt.
 
 - Zuschaueransicht in dunklen Olivtönen, mit großer mittiger Spielfeldüberschrift und Kameranamen unter den Bildern.
 - Überschrift pro Bildschirm in Tab 3 festlegen; Standard: Spielfeld 1, Spielfeld 2 usw.
@@ -34,3 +36,5 @@ Quellcode: MIT. VLC unter seinen eigenen Lizenzbedingungen; Lizenztexte und Plug
 ## Datenschutz
 
 Keine echten Kameradaten, Konfigurationsexporte, Passwörter oder Aufnahmen in dieses öffentliche Repository laden. Die Update-Prüfung sendet keine Kamerakonfiguration. Exportdateien enthalten Zugangsdaten und benötigen ein starkes Passwort. Vorschaubilder im Release sind als künstliche Layoutansicht gekennzeichnet.
+
+
