@@ -318,23 +318,25 @@ public class VideoTile : Panel {
  Panel surface=new Panel {Dock=DockStyle.Fill,BackColor=Color.Black}; Label title=new Label {Dock=DockStyle.Top,Height=29,TextAlign=ContentAlignment.MiddleLeft,Padding=new Padding(8,0,0,0)};
  Label state=new Label {Dock=DockStyle.Bottom,Height=25,TextAlign=ContentAlignment.MiddleLeft,Padding=new Padding(8,0,0,0),ForeColor=Color.Silver};
  Label message=new Label {Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.Gray};
- System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer {Interval=1000}; IntPtr player,activeMedia; Camera camera; Settings settings; bool demo,closing,retiring,starting,native; DateTime since,retry; int failures; PlaybackHealth health;RawCameraSource raw;long previousInput,previousFrames;int previousDisplayed;DateTime inputRateAt;double inputRate,inputFps,displayFps;
+ System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer {Interval=1000}; IntPtr player,activeMedia; Camera camera; Settings settings; bool demo,closing,retiring,starting,native,audience; DateTime since,retry; int failures; PlaybackHealth health;RawCameraSource raw;long previousInput,previousFrames;int previousDisplayed;DateTime inputRateAt;double inputRate,inputFps,displayFps;
  public bool HasCamera {get{return camera!=null;}}
  public int DisplayedFrames {get {Vlc.Stats stats;return activeMedia!=IntPtr.Zero && Vlc.libvlc_media_get_stats(activeMedia,out stats)?stats.Displayed:0;}}
  Queue<string> history=new Queue<string>();int loggedState=-1;DateTime logAt=DateTime.MinValue;
  void Log(string text){history.Enqueue(DateTime.Now.ToString("HH:mm:ss")+" "+text);while(history.Count>35)history.Dequeue();}
- public string Diagnostic(){return "SpielfeldTV 0.7 · Wiedergabediagnose\r\nKamera: "+camera.Host+":"+(native?camera.DvripPort:camera.Port)+"\r\nZugang: "+(native?"XM / DVR-IP":"RTSP")+"; Transport: "+(native||camera.Tcp?"TCP":"UDP")+"; Kamera-Bildrate: "+(raw==null?"unbekannt":raw.Fps.ToString())+"; Eingang gemessen: "+(inputRate/1024).ToString("0.0")+" KiB/s; Eingang: "+inputFps.ToString("0.0")+" FPS; Anzeige: "+displayFps.ToString("0.0")+" FPS; Mehrkamera: "+settings.Multicam+"; Hardware: "+settings.Hardware+"; Puffer: "+settings.Cache+" ms\r\nStream-Pfad und Zugangsdaten sind ausgeblendet.\r\nStatus: "+state.Text+"\r\n"+String.Join("\r\n",history.ToArray());}
+ public string Diagnostic(){return "SpielfeldTV 0.8 · Wiedergabediagnose\r\nKamera: "+camera.Host+":"+(native?camera.DvripPort:camera.Port)+"\r\nZugang: "+(native?"XM / DVR-IP":"RTSP")+"; Transport: "+(native||camera.Tcp?"TCP":"UDP")+"; Kamera-Bildrate: "+(raw==null?"unbekannt":raw.Fps.ToString())+"; Eingang gemessen: "+(inputRate/1024).ToString("0.0")+" KiB/s; Eingang: "+inputFps.ToString("0.0")+" FPS; Anzeige: "+displayFps.ToString("0.0")+" FPS; Mehrkamera: "+settings.Multicam+"; Hardware: "+settings.Hardware+"; Puffer: "+settings.Cache+" ms\r\nStream-Pfad und Zugangsdaten sind ausgeblendet.\r\nStatus: "+state.Text+"\r\n"+String.Join("\r\n",history.ToArray());}
  public event EventHandler FocusRequested;
- public VideoTile(Camera c,Settings s,bool isDemo,int position) {
-  camera=c;settings=s;demo=isDemo;Dock=DockStyle.Fill;Margin=new Padding(3);BackColor=UI.Card;
+ public VideoTile(Camera c,Settings s,bool isDemo,int position,bool customerView=false) {
+  camera=c;settings=s;demo=isDemo;audience=customerView;Dock=DockStyle.Fill;Margin=new Padding(3);BackColor=UI.Card;
   title.Text=c==null?"Platz "+position+" · nicht belegt":c.Name;title.ForeColor=UI.Ink;
   surface.Controls.Add(message);Controls.Add(surface);Controls.Add(state);Controls.Add(title);
+  if(audience){Margin=new Padding(3);BackColor=Color.Black;state.Visible=false;title.Dock=DockStyle.Bottom;title.Height=40;title.Padding=new Padding(13,0,12,0);title.Font=new Font("Segoe UI",12,FontStyle.Regular);title.BackColor=Color.FromArgb(18,23,30);title.ForeColor=Color.FromArgb(240,242,245);title.AutoEllipsis=true;title.UseMnemonic=false;message.Font=new Font("Segoe UI",11);message.ForeColor=Color.FromArgb(150,159,172);if(c==null&&!demo){title.Visible=false;message.Visible=false;}if(c==null&&demo)title.Text="Kamera "+position;}
   title.DoubleClick+=Focus;surface.DoubleClick+=Focus;message.DoubleClick+=Focus;
   timer.Tick+=(a,b)=>Tick();
-  HandleCreated+=(a,b)=>{if(c!=null || demo) { retry=DateTime.UtcNow.AddMilliseconds(position*120);timer.Start();}else {message.Text="Kamera in der Verwaltung zuweisen";state.Text="Frei";}};
+  HandleCreated+=(a,b)=>{if(c!=null || demo) { retry=DateTime.UtcNow.AddMilliseconds(position*120);timer.Start();}else {message.Text=audience?"":"Kamera in der Verwaltung zuweisen";state.Text="Frei";}};
   Disposed+=(a,b)=>{closing=true;timer.Stop();timer.Dispose();Retire();};
  }
- void Focus(object s,EventArgs e) {if(FocusRequested!=null)FocusRequested(this,EventArgs.Empty);}
+ public void AttachViewerMenu(ContextMenuStrip menu){ContextMenuStrip=surface.ContextMenuStrip=title.ContextMenuStrip=message.ContextMenuStrip=menu;}
+ void Focus(object s,EventArgs e) {if(audience&&camera==null&&!demo)return;if(FocusRequested!=null)FocusRequested(this,EventArgs.Empty);}
  async void Retire() {
   if(raw!=null){raw.Dispose();raw=null;}
   var old=player;var oldMedia=activeMedia;player=activeMedia=IntPtr.Zero;if(old==IntPtr.Zero)return;retiring=true;
@@ -342,7 +344,7 @@ public class VideoTile : Panel {
  }
  async void StartVideo() {
   if(closing||retiring||starting||camera==null)return;
-  if(!Vlc.Init()){message.Text=Vlc.Failure;state.Text="VLC fehlt";timer.Stop();return;}
+  if(!Vlc.Init()){message.Text=audience?"Livebild momentan nicht verfügbar":Vlc.Failure;state.Text="VLC fehlt";timer.Stop();return;}
   IntPtr media=IntPtr.Zero;starting=true;
   try {
    native=NativeBridge.Use(camera);string url;if(native){var source=await RawCameraSource.Open(camera);if(closing){source.Dispose();return;}raw=source;previousInput=previousFrames=0;previousDisplayed=0;inputRateAt=DateTime.UtcNow;url=source.Url;}else url=camera.Url();if(closing)return;
@@ -358,7 +360,7 @@ public class VideoTile : Panel {
   } catch(Exception ex) {if(!closing)Fail(native?ex.Message:"Video konnte nicht gestartet werden");} finally {starting=false;if(media!=IntPtr.Zero)Vlc.libvlc_media_release(media);}
  }
  void Fail() {Fail("Video konnte nicht gestartet werden");}
- void Fail(string reason) { Log(reason);failures++; Retire(); int seconds=Math.Min(30,3+failures*3);retry=DateTime.UtcNow.AddSeconds(seconds);message.Visible=true;message.Text=reason+"\nIn der Vorschau Diagnose kopieren, falls das Problem bestehen bleibt";state.Text="Offline · "+reason+" · neuer Versuch in "+seconds+" s";state.ForeColor=Color.SandyBrown; }
+ void Fail(string reason) { Log(reason);failures++; Retire(); int seconds=Math.Min(30,3+failures*3);retry=DateTime.UtcNow.AddSeconds(seconds);message.Visible=true;message.Text=audience?"Livebild momentan nicht verfügbar\nVerbindung wird wiederhergestellt …":reason+"\nIn der Vorschau Diagnose kopieren, falls das Problem bestehen bleibt";state.Text="Offline · "+reason+" · neuer Versuch in "+seconds+" s";state.ForeColor=Color.SandyBrown; }
  void Tick() {
   if(closing)return;
   if(demo) {message.Text="DEMO · KEIN LIVEBILD\n"+DateTime.Now.ToString("HH:mm:ss");message.ForeColor=UI.Accent;state.Text="Demoansicht · Platzhalter";return;}
@@ -374,7 +376,7 @@ public class VideoTile : Panel {
 public class CameraForm : Form {
  public Camera Result; TextBox name=new TextBox(),host=new TextBox(),user=new TextBox(),password=new TextBox {UseSystemPasswordChar=true}; ComboBox path=new ComboBox {DropDownStyle=ComboBoxStyle.DropDown},backend=UI.Combo(); NumericUpDown port=new NumericUpDown {Minimum=1,Maximum=65535},dvrip=new NumericUpDown{Minimum=1,Maximum=65535}; CheckBox tcp=new CheckBox{Text="RTSP über TCP (sonst UDP)",AutoSize=true}; Settings settings; CancellationTokenSource workCancel; TextBox diagnosis=new TextBox{Dock=DockStyle.Bottom,Height=100,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Text="Automatisch nutzt für erkannte XM-Kameras den nativen DVR/IP-Zugang. Sonst RTSP."};
  public CameraForm(Camera c,Settings s) {
-  settings=s;Result=c.Copy();Text="Kamera einrichten · Version 0.7";Size=new Size(960,Math.Min(900,Screen.PrimaryScreen.WorkingArea.Height-45));MinimumSize=new Size(760,620);UI.Style(this);
+  settings=s;Result=c.Copy();Text="Kamera einrichten · Version 0.8";Size=new Size(960,Math.Min(900,Screen.PrimaryScreen.WorkingArea.Height-45));MinimumSize=new Size(760,620);UI.Style(this);
   var table=new TableLayoutPanel {Dock=DockStyle.Top,AutoSize=true,Padding=new Padding(18),ColumnCount=2};table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,190));table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
   path.Items.AddRange(new object[]{"/onvif1","/onvif2","/1","/2","/user={user}_password={password}_channel=0_stream=1.sdp?"});
   backend.Items.AddRange(new object[]{"Automatisch","RTSP direkt","XM / VMS (DVR/IP)"});backend.SelectedIndex=c.Backend=="XM"?2:c.Backend=="RTSP"?1:0;
@@ -397,39 +399,21 @@ public class PreviewForm : Form {
  void Restart(){foreach(Control child in area.Controls.Cast<Control>().ToArray())child.Dispose();options.Hardware=!software.Checked;camera.Tcp=tcp.Checked;area.Controls.Add(new VideoTile(camera,options,false,1));}
 }
 public class DisplayForm : Form {
+ Settings settings;bool demo;TableLayoutPanel table;List<VideoTile> tiles=new List<VideoTile>();VideoTile focused;Dictionary<VideoTile,TableLayoutPanelCellPosition> positions=new Dictionary<VideoTile,TableLayoutPanelCellPosition>();List<ViewPage> pages;string screenName;int pageIndex;Panel canvas=new Panel{Dock=DockStyle.Fill,BackColor=Color.FromArgb(8,11,15),Padding=new Padding(5)};ContextMenuStrip menu=new ContextMenuStrip();
  public string Diagnostics(){return String.Join("\r\n\r\n",tiles.Where(t=>t.HasCamera).Select(t=>t.Diagnostic()));}
- TabControl tabs=new TabControl {Dock=DockStyle.Fill}; Settings settings; bool demo; TableLayoutPanel table; List<VideoTile> tiles=new List<VideoTile>(); VideoTile focused; Dictionary<VideoTile,TableLayoutPanelCellPosition> positions=new Dictionary<VideoTile,TableLayoutPanelCellPosition>(); List<ViewPage> pages; string screenName;
- public DisplayForm(Settings s,Screen screen,List<ViewPage> views,bool isDemo) {
-  settings=s;demo=isDemo;pages=views;screenName=screen.DeviceName;Text="SpielfeldTV · "+screen.DeviceName;UI.Style(this);FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;Bounds=screen.Bounds;KeyPreview=true;TopMost=false;
-  var top=UI.Bar();top.Padding=new Padding(4);top.Controls.Add(UI.Label("SPIELFELD TV"+(demo?" · DEMO":" · ZUSCHAUER")));top.Controls.Add(UI.Button("Fenster / Vollbild (F11)",(a,b)=>ToggleFull()));top.Controls.Add(UI.Button("Schließen (Esc)",(a,b)=>Close()));
-  foreach(var p in pages)tabs.TabPages.Add(p.Name);
-  Controls.Add(tabs);Controls.Add(top);tabs.SelectedIndexChanged+=(a,b)=>LoadPage();
-  int active=pages.FindIndex(p=>settings.ActivePages.Contains(screenName+"|"+p.Name));if(active>=0)tabs.SelectedIndex=active;
-  Shown+=(a,b)=>LoadPage();FormClosed+=(a,b)=>ClearTiles();
-  KeyDown+=(a,b)=>{if(b.KeyCode==Keys.Escape){if(focused!=null)FocusTile(focused);else Close();}if(b.KeyCode==Keys.F11)ToggleFull();};
- }
+ public DisplayForm(Settings s,Screen screen,List<ViewPage> views,bool isDemo){settings=s;demo=isDemo;pages=views;screenName=screen.DeviceName;Text="SpielfeldTV · "+screen.DeviceName;UI.Style(this);BackColor=Color.FromArgb(8,11,15);FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;Bounds=screen.Bounds;KeyPreview=true;Controls.Add(canvas);ContextMenuStrip=menu;canvas.ContextMenuStrip=menu;menu.Opening+=(a,b)=>BuildMenu();int saved=pages.FindIndex(p=>settings.ActivePages.Contains(screenName+"|"+p.Name));pageIndex=Math.Max(0,saved);Shown+=(a,b)=>LoadPage();FormClosed+=(a,b)=>{ClearTiles();menu.Dispose();};KeyDown+=(a,b)=>{if(b.KeyCode==Keys.Escape){if(focused!=null)FocusTile(focused);else Close();b.Handled=true;}else if(b.KeyCode==Keys.F11){ToggleFull();b.Handled=true;}else if(b.KeyCode==Keys.PageDown||(b.Control&&b.KeyCode==Keys.Tab)){SelectView((pageIndex+(b.Shift?-1:1)+pages.Count)%pages.Count);b.SuppressKeyPress=true;}else if(b.KeyCode==Keys.PageUp){SelectView((pageIndex-1+pages.Count)%pages.Count);b.SuppressKeyPress=true;}};}
+ void BuildMenu(){foreach(ToolStripItem item in menu.Items.Cast<ToolStripItem>().ToArray())item.Dispose();menu.Items.Clear();if(pages.Count>1){var views=new ToolStripMenuItem("Ansicht wechseln");for(int i=0;i<pages.Count;i++){int index=i;var item=new ToolStripMenuItem(pages[i].Name){Checked=i==pageIndex};item.Click+=(a,b)=>SelectView(index);views.DropDownItems.Add(item);}menu.Items.Add(views);menu.Items.Add(new ToolStripSeparator());}var raster=new ToolStripMenuItem("Zur Rasteransicht"){Enabled=focused!=null};raster.Click+=(a,b)=>{if(focused!=null)FocusTile(focused);};menu.Items.Add(raster);menu.Items.Add("Vollbild / Fenster  ·  F11",null,(a,b)=>ToggleFull());menu.Items.Add("Zuschaueranzeige schließen",null,(a,b)=>Close());}
+ public void SelectView(int index){if(index<0||index>=pages.Count)return;pageIndex=index;LoadPage();}
  void ToggleFull(){if(FormBorderStyle==FormBorderStyle.None){FormBorderStyle=FormBorderStyle.Sizable;Bounds=Screen.FromControl(this).WorkingArea;}else{FormBorderStyle=FormBorderStyle.None;Bounds=Screen.FromControl(this).Bounds;}}
  void ClearTiles(){foreach(var t in tiles)t.Dispose();tiles.Clear();positions.Clear();focused=null;if(table!=null){table.Dispose();table=null;}}
- void LoadPage() {
-  if(tabs.SelectedIndex<0)return; ClearTiles();var p=pages[tabs.SelectedIndex];
-  settings.ActivePages.RemoveAll(x=>x.StartsWith(screenName+"|",StringComparison.Ordinal));settings.ActivePages.Add(screenName+"|"+p.Name);
-  table=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=p.Columns,RowCount=p.Rows,BackColor=Color.Black};
-  for(int c=0;c<p.Columns;c++)table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/p.Columns));for(int r=0;r<p.Rows;r++)table.RowStyles.Add(new RowStyle(SizeType.Percent,100f/p.Rows));
-  tabs.SelectedTab.Controls.Add(table);table.SuspendLayout();
-  for(int i=0;i<p.Rows*p.Columns;i++){string id=p.Slots[i];var cam=settings.Cameras.FirstOrDefault(x=>x.Id==id);var tile=new VideoTile(cam,settings,demo,i+1);tile.FocusRequested+=(a,b)=>FocusTile((VideoTile)a);table.Controls.Add(tile,i%p.Columns,i/p.Columns);tiles.Add(tile);positions[tile]=new TableLayoutPanelCellPosition(i%p.Columns,i/p.Columns);}
-  table.ResumeLayout();
- }
- void FocusTile(VideoTile t) {
-  table.SuspendLayout();
-  if(focused!=null){table.SetColumnSpan(focused,1);table.SetRowSpan(focused,1);table.SetCellPosition(focused,positions[focused]);foreach(var tile in tiles)tile.Visible=true;if(focused==t){focused=null;table.ResumeLayout();return;}}
-  focused=t;foreach(var tile in tiles)tile.Visible=tile==t;table.SetCellPosition(t,new TableLayoutPanelCellPosition(0,0));table.SetColumnSpan(t,table.ColumnCount);table.SetRowSpan(t,table.RowCount);table.ResumeLayout();
- }
+ void LoadPage(){if(pages.Count==0)return;ClearTiles();var p=pages[pageIndex];settings.ActivePages.RemoveAll(x=>x.StartsWith(screenName+"|",StringComparison.Ordinal));settings.ActivePages.Add(screenName+"|"+p.Name);table=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=p.Columns,RowCount=p.Rows,BackColor=canvas.BackColor,Margin=Padding.Empty,Padding=Padding.Empty,ContextMenuStrip=menu};for(int c=0;c<p.Columns;c++)table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/p.Columns));for(int r=0;r<p.Rows;r++)table.RowStyles.Add(new RowStyle(SizeType.Percent,100f/p.Rows));canvas.Controls.Add(table);table.SuspendLayout();for(int i=0;i<p.Rows*p.Columns;i++){var cam=settings.Cameras.FirstOrDefault(x=>x.Id==p.Slots[i]);var tile=new VideoTile(cam,settings,demo,i+1,true);tile.AttachViewerMenu(menu);tile.FocusRequested+=(a,b)=>FocusTile((VideoTile)a);table.Controls.Add(tile,i%p.Columns,i/p.Columns);tiles.Add(tile);positions[tile]=new TableLayoutPanelCellPosition(i%p.Columns,i/p.Columns);}table.ResumeLayout();}
+ void FocusTile(VideoTile t){table.SuspendLayout();if(focused!=null){table.SetColumnSpan(focused,1);table.SetRowSpan(focused,1);table.SetCellPosition(focused,positions[focused]);foreach(var tile in tiles)tile.Visible=true;if(focused==t){focused=null;table.ResumeLayout();return;}}focused=t;foreach(var tile in tiles)tile.Visible=tile==t;table.SetCellPosition(t,new TableLayoutPanelCellPosition(0,0));table.SetColumnSpan(t,table.ColumnCount);table.SetRowSpan(t,table.RowCount);table.ResumeLayout();}
 }
 public class Choice {public string Id,Name;public override string ToString(){return Name;}}
 public partial class MainForm : Form {
  Settings settings; DataGridView cameras=UI.Grid(); ListBox pages=new ListBox {Dock=DockStyle.Fill,BackColor=UI.Card,ForeColor=UI.Ink,BorderStyle=BorderStyle.None,ItemHeight=30}; ComboBox monitor=UI.Combo(); NumericUpDown rows=new NumericUpDown {Minimum=1,Maximum=5,Width=65},cols=new NumericUpDown {Minimum=1,Maximum=5,Width=65},cache=new NumericUpDown {Minimum=100,Maximum=3000,Increment=100,Width=90}; TextBox pageName=new TextBox {Width=180};TableLayoutPanel slots=new TableLayoutPanel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(8)};CheckBox auto=new CheckBox {Text="Gespeicherte Zuschauerfenster beim Programmstart öffnen",AutoSize=true},hw=new CheckBox {Text="Hardwaredecodierung verwenden",AutoSize=true};Label info=UI.Label("");List<DisplayForm> displays=new List<DisplayForm>();bool loading;
  public MainForm(Settings s) {
-  settings=s;DisplayConfigNames.Resolve(settings);Text="SpielfeldTV 0.7 · Verwaltung";Size=new Size(1240,830);MinimumSize=new Size(1050,690);UI.Style(this);
+  settings=s;DisplayConfigNames.Resolve(settings);Text="SpielfeldTV 0.8 · Verwaltung";Size=new Size(1240,830);MinimumSize=new Size(1050,690);UI.Style(this);
   var header=UI.Bar();header.Padding=new Padding(18);header.Controls.Add(new Label {Text="SPIELFELD TV",Font=new Font("Segoe UI",20,FontStyle.Bold),ForeColor=UI.Accent,AutoSize=true,Margin=new Padding(0,0,25,0)});header.Controls.Add(UI.Button("Zuschaueranzeigen starten",(a,b)=>Launch(false)));header.Controls.Add(UI.Button("Demo ansehen",(a,b)=>Launch(true)));header.Controls.Add(UI.Button("Anzeigen schließen",(a,b)=>CloseDisplays()));header.Controls.Add(UI.Button("Alles speichern",(a,b)=>Save()));
   var tab=new TabControl {Dock=DockStyle.Fill};var ct=new TabPage("1  Kameras hinzufügen");var lt=new TabPage("2  Raster & Tabs");var st=new TabPage("3  Start & Wiedergabe");foreach(var t in new[]{ct,lt,st}){t.BackColor=UI.Bg;t.ForeColor=UI.Ink;tab.TabPages.Add(t);}
   cameras.Columns.Add("name","Kamera / Spielfeld");cameras.Columns.Add("ip","IP-Adresse");cameras.Columns.Add("port","Port");cameras.Columns.Add("path","Stream-Pfad");cameras.CellDoubleClick+=(a,b)=>EditCamera();
@@ -441,7 +425,7 @@ public partial class MainForm : Form {
   monitor.DropDownWidth=400;foreach(var screen in Screen.AllScreens)monitor.Items.Add(new Choice {Id=screen.DeviceName,Name=MonitorNames.Label(screen)});
   pages.SelectedIndexChanged+=(a,b)=>LoadPageEditor();pageName.TextChanged+=(a,b)=>{if(!loading){CommitPage();pages.Invalidate();}};monitor.SelectedIndexChanged+=(a,b)=>{if(!loading)CommitPage();};rows.ValueChanged+=(a,b)=>ResizeGrid();cols.ValueChanged+=(a,b)=>ResizeGrid();
   pages.DrawMode=DrawMode.OwnerDrawFixed;pages.DrawItem+=(a,b)=>{if(b.Index<0)return;b.DrawBackground();TextRenderer.DrawText(b.Graphics,((ViewPage)pages.Items[b.Index]).Name,b.Font,b.Bounds,UI.Ink,TextFormatFlags.VerticalCenter|TextFormatFlags.Left);b.DrawFocusRectangle();};
-  var options=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,Padding=new Padding(22),WrapContents=false,AutoScroll=true};auto.Checked=settings.AutoOpen;hw.Checked=settings.Hardware;cache.Value=Math.Max(100,Math.Min(3000,settings.Cache));options.Controls.Add(auto);options.Controls.Add(hw);options.Controls.Add(UI.Label("Videopuffer in Millisekunden (kleiner = weniger Verzögerung, größer = mehr Reserve):"));options.Controls.Add(cache);options.Controls.Add(UI.Label("Für die Rasteransicht möglichst den kleineren Kamerastream verwenden.\nAlle Bilder laufen ohne Ton. Die tatsächliche Leistung hängt von PC, Codec und Netzwerk ab.\nDie Software zeichnet nicht auf.\n\nWindows-Anzeigeeinstellung: Diese Anzeigen erweitern.\nF11: Vollbild/Fenster. Esc: Einzelbild verlassen oder Zuschauerfenster schließen.\nDoppelklick auf Kameranamen oder Bild: Einzelbild / Raster.\n\nAutomatisches Öffnen gilt beim Start dieser Anwendung. Windows-Start lässt sich unten aktivieren.\nNach Änderungen: speichern und Zuschaueranzeigen neu starten.\nMaximal drei verschiedene Bildschirme gleichzeitig; Raster bis 5 × 5 pro Tab."));options.Controls.Add(UI.Button("VLC-Download öffnen",(a,b)=>System.Diagnostics.Process.Start("https://www.videolan.org/vlc/download-windows.html")));st.Controls.Add(options);
+  var options=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,Padding=new Padding(22),WrapContents=false,AutoScroll=true};auto.Checked=settings.AutoOpen;hw.Checked=settings.Hardware;cache.Value=Math.Max(100,Math.Min(3000,settings.Cache));options.Controls.Add(auto);options.Controls.Add(hw);options.Controls.Add(UI.Label("Videopuffer in Millisekunden (kleiner = weniger Verzögerung, größer = mehr Reserve):"));options.Controls.Add(cache);options.Controls.Add(UI.Label("Für die Rasteransicht möglichst den kleineren Kamerastream verwenden.\nAlle Bilder laufen ohne Ton. Die tatsächliche Leistung hängt von PC, Codec und Netzwerk ab.\nDie Software zeichnet nicht auf.\n\nWindows-Anzeigeeinstellung: Diese Anzeigen erweitern.\nF11: Vollbild/Fenster. Esc: Einzelbild verlassen oder Zuschauerfenster schließen.\nDoppelklick auf Kameranamen oder Bild: Einzelbild / Raster.\nZuschaueransicht: nur Kameras und Namen. Rechtsklick: Ansichten und Bedienung.\nBild auf / Bild ab oder Strg+Tab: zwischen Ansichten wechseln.\n\nAutomatisches Öffnen gilt beim Start dieser Anwendung. Windows-Start lässt sich unten aktivieren.\nNach Änderungen: speichern und Zuschaueranzeigen neu starten.\nMaximal drei verschiedene Bildschirme gleichzeitig; Raster bis 5 × 5 pro Tab."));options.Controls.Add(UI.Button("VLC-Download öffnen",(a,b)=>System.Diagnostics.Process.Start("https://www.videolan.org/vlc/download-windows.html")));st.Controls.Add(options);
   info.Dock=DockStyle.Bottom;info.Padding=new Padding(12);info.Height=48;info.AutoSize=false;Controls.Add(tab);Controls.Add(info);Controls.Add(header);
   AddFeatures(tab);RefreshCameras();RefreshPages(settings.Pages.FirstOrDefault());
   Shown+=(a,b)=>{if(settings.AutoOpen)Launch(false);};FormClosing+=(a,b)=>{if(!Save()){b.Cancel=true;return;}CloseDisplays();};
@@ -530,11 +514,13 @@ public static class Tests {
    tabs.SelectedIndex=2;Application.DoEvents();if(args.Length>1)Snapshot(main,System.IO.Path.Combine(System.IO.Path.GetDirectoryName(args[1]),"Start.png"));tabs.SelectedIndex=3;Application.DoEvents();if(args.Length>1)Snapshot(main,System.IO.Path.Combine(System.IO.Path.GetDirectoryName(args[1]),"Uebertragen.png"));main.Hide();}
   using(var editor=new CameraForm(c,s)){editor.Show();Application.DoEvents();if(args.Length>1)Snapshot(editor,System.IO.Path.Combine(System.IO.Path.GetDirectoryName(args[1]),"Kamera.png"));editor.Hide();}
   using(var discovery=new DiscoveryForm()){discovery.Show();Application.DoEvents();if(args.Length>1)Snapshot(discovery,System.IO.Path.Combine(System.IO.Path.GetDirectoryName(args[1]),"Suche.png"));discovery.Hide();}
-  using(var display=new DisplayForm(s,Screen.AllScreens[0],s.Pages,true)){display.Show();Pump(1200);Assert(Descendants(display).OfType<VideoTile>().Count()==8,"Demoraster");var tabs=Descendants(display).OfType<TabControl>().First();tabs.SelectedIndex=2;Pump(1200);Assert(Descendants(display).OfType<VideoTile>().Count()==4,"Tabwechsel gibt alte Videos frei");if(args.Length>1)Snapshot(display,System.IO.Path.Combine(System.IO.Path.GetDirectoryName(args[1]),"Demo.png"));display.Close();}
+  using(var display=new DisplayForm(s,Screen.AllScreens[0],s.Pages,true)){display.Show();Pump(1200);Assert(Descendants(display).OfType<VideoTile>().Count()==8,"Demoraster");display.SelectView(2);Pump(1200);Assert(Descendants(display).OfType<VideoTile>().Count()==4,"Tabwechsel gibt alte Videos frei");if(args.Length>1)Snapshot(display,System.IO.Path.Combine(System.IO.Path.GetDirectoryName(args[1]),"Demo.png"));display.Close();}
   Console.WriteLine("PASS: DPAPI, XML roundtrip, URL escaping, IP validation, ONVIF parser, loopback TCP, UI creation.");return 0;
  }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}}
 }
 }
+
+
 
 
 
