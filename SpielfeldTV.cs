@@ -262,7 +262,10 @@ public static class Vlc {
  [DllImport("libvlc.dll",CallingConvention=CallingConvention.Cdecl)] public static extern void libvlc_video_set_mouse_input(IntPtr p,uint on);
  [DllImport("libvlc.dll",CallingConvention=CallingConvention.Cdecl)] public static extern void libvlc_video_set_key_input(IntPtr p,uint on);
  public static byte[] Utf(string s) { return Encoding.UTF8.GetBytes(s+"\0"); }
- public static bool Init() {
+ static readonly object initGate=new object(),asyncGate=new object();static Task<bool> initialization;
+ public static Task<bool> InitAsync(){lock(asyncGate){if(initialization==null||initialization.IsFaulted||initialization.IsCanceled||(initialization.Status==TaskStatus.RanToCompletion&&!initialization.Result))initialization=Task.Run(()=>Init());return initialization;}}
+ public static bool Init(){lock(initGate)return InitCore();}
+ static bool InitCore() {
   if(Instance!=IntPtr.Zero)return true;
   string path=System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"vlc");
   if(!File.Exists(System.IO.Path.Combine(path,"libvlc.dll")))path=System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"VideoLAN","VLC");
@@ -318,6 +321,7 @@ public class VideoTile : Panel {
  Panel surface=new Panel {Dock=DockStyle.Fill,BackColor=Color.Black}; Label title=new Label {Dock=DockStyle.Top,Height=29,TextAlign=ContentAlignment.MiddleLeft,Padding=new Padding(8,0,0,0)};
  Label state=new Label {Dock=DockStyle.Bottom,Height=25,TextAlign=ContentAlignment.MiddleLeft,Padding=new Padding(8,0,0,0),ForeColor=Color.Silver};
  Label message=new Label {Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Color.Gray};
+ static readonly SemaphoreSlim startGate=new SemaphoreSlim(2);
  System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer {Interval=1000}; IntPtr player,activeMedia; Camera camera; Settings settings; bool demo,closing,retiring,starting,native,audience; DateTime since,retry; int failures; PlaybackHealth health;RawCameraSource raw;long previousInput,previousFrames;int previousDisplayed;DateTime inputRateAt;double inputRate,inputFps,displayFps;
  public bool HasCamera {get{return camera!=null;}}
  public int DisplayedFrames {get {Vlc.Stats stats;return activeMedia!=IntPtr.Zero && Vlc.libvlc_media_get_stats(activeMedia,out stats)?stats.Displayed:0;}}
@@ -344,19 +348,21 @@ public class VideoTile : Panel {
  }
  async void StartVideo() {
   if(closing||retiring||starting||camera==null)return;
-  if(!Vlc.Init()){message.Text=audience?"Livebild momentan nicht verfügbar":Vlc.Failure;state.Text="VLC fehlt";timer.Stop();return;}
   IntPtr media=IntPtr.Zero;starting=true;
   try {
+   if(!await Vlc.InitAsync()){if(!closing){message.Text=audience?"Livebild momentan nicht verfügbar":Vlc.Failure;state.Text="VLC fehlt";timer.Stop();}return;}if(closing)return;
    native=NativeBridge.Use(camera);string url;if(native){var source=await RawCameraSource.Open(camera);if(closing){source.Dispose();return;}raw=source;previousInput=previousFrames=0;previousDisplayed=0;inputRateAt=DateTime.UtcNow;url=source.Url;}else url=camera.Url();if(closing)return;
    media=Vlc.libvlc_media_new_location(Vlc.Instance,Vlc.Utf(url));if(media==IntPtr.Zero)throw new Exception();
    foreach(var option in new[]{native||camera.Tcp?":rtsp-tcp":":no-rtsp-tcp",":network-caching="+settings.Cache,":avcodec-hw="+(settings.Hardware?"any":"none"),":no-audio",":rtsp-timeout=5"}) Vlc.libvlc_media_add_option(media,Vlc.Utf(option));
    Vlc.libvlc_media_add_option(media,Vlc.Utf(":rtsp-frame-buffer-size=4000000"));
    Vlc.libvlc_media_add_option(media,Vlc.Utf(":avcodec-threads="+(settings.Multicam?2:0)));Vlc.libvlc_media_add_option(media,Vlc.Utf(settings.Multicam?":drop-late-frames":":no-drop-late-frames"));
    if(raw!=null){Vlc.libvlc_media_add_option(media,Vlc.Utf(":demux="+raw.Demux));Vlc.libvlc_media_add_option(media,Vlc.Utf(":"+raw.Demux+"-fps="+raw.Fps));}
-   player=Vlc.libvlc_media_player_new_from_media(media);if(player==IntPtr.Zero)throw new Exception();activeMedia=media;media=IntPtr.Zero;
-   Vlc.libvlc_media_player_set_hwnd(player,surface.Handle);Vlc.libvlc_video_set_mouse_input(player,0);Vlc.libvlc_video_set_key_input(player,0);Vlc.libvlc_audio_set_mute(player,1);
-   since=DateTime.UtcNow;health=new PlaybackHealth(since);loggedState=-1;Log("Wiedergabe starten");message.Visible=true;message.Text="Verbindung wird hergestellt …";state.Text="Verbinde …";
-   if(Vlc.libvlc_media_player_play(player)!=0)throw new Exception();
+   IntPtr outputHandle=surface.Handle,pendingMedia=media,createdPlayer=IntPtr.Zero;
+   message.Visible=true;message.Text="Livebild wird verbunden …";state.Text="Verbinde …";
+   await startGate.WaitAsync();
+   try{createdPlayer=await Task.Run(()=>{IntPtr pending=IntPtr.Zero;try{if(Volatile.Read(ref closing))throw new OperationCanceledException();pending=Vlc.libvlc_media_player_new_from_media(pendingMedia);if(pending==IntPtr.Zero)throw new Exception("Videoplayer konnte nicht angelegt werden.");Vlc.libvlc_media_player_set_hwnd(pending,outputHandle);Vlc.libvlc_video_set_mouse_input(pending,0);Vlc.libvlc_video_set_key_input(pending,0);Vlc.libvlc_audio_set_mute(pending,1);if(Volatile.Read(ref closing))throw new OperationCanceledException();if(Vlc.libvlc_media_player_play(pending)!=0)throw new Exception("Videoplayer konnte nicht gestartet werden.");return pending;}catch{if(pending!=IntPtr.Zero){Vlc.libvlc_media_player_stop(pending);Vlc.libvlc_media_player_release(pending);}throw;}});}finally{startGate.Release();}
+   if(closing){await Task.Run(()=>{Vlc.libvlc_media_player_stop(createdPlayer);Vlc.libvlc_media_player_release(createdPlayer);});return;}
+   player=createdPlayer;activeMedia=media;media=IntPtr.Zero;since=DateTime.UtcNow;health=new PlaybackHealth(since);loggedState=-1;Log("Wiedergabe starten");
   } catch(Exception ex) {if(!closing)Fail(native?ex.Message:"Video konnte nicht gestartet werden");} finally {starting=false;if(media!=IntPtr.Zero)Vlc.libvlc_media_release(media);}
  }
  void Fail() {Fail("Video konnte nicht gestartet werden");}
@@ -411,7 +417,7 @@ public class DisplayForm : Form {
 }
 public class Choice {public string Id,Name;public override string ToString(){return Name;}}
 public partial class MainForm : Form {
- Settings settings; DataGridView cameras=UI.Grid(); ListBox pages=new ListBox {Dock=DockStyle.Fill,BackColor=UI.Card,ForeColor=UI.Ink,BorderStyle=BorderStyle.None,ItemHeight=30}; ComboBox monitor=UI.Combo(); NumericUpDown rows=new NumericUpDown {Minimum=1,Maximum=5,Width=65},cols=new NumericUpDown {Minimum=1,Maximum=5,Width=65},cache=new NumericUpDown {Minimum=100,Maximum=3000,Increment=100,Width=90}; TextBox pageName=new TextBox {Width=180};TableLayoutPanel slots=new TableLayoutPanel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(8)};CheckBox auto=new CheckBox {Text="Gespeicherte Zuschauerfenster beim Programmstart öffnen",AutoSize=true},hw=new CheckBox {Text="Hardwaredecodierung verwenden",AutoSize=true};Label info=UI.Label("");List<DisplayForm> displays=new List<DisplayForm>();bool loading;
+ Settings settings; DataGridView cameras=UI.Grid(); ListBox pages=new ListBox {Dock=DockStyle.Fill,BackColor=UI.Card,ForeColor=UI.Ink,BorderStyle=BorderStyle.None,ItemHeight=30}; ComboBox monitor=UI.Combo(); NumericUpDown rows=new NumericUpDown {Minimum=1,Maximum=5,Width=65},cols=new NumericUpDown {Minimum=1,Maximum=5,Width=65},cache=new NumericUpDown {Minimum=100,Maximum=3000,Increment=100,Width=90}; TextBox pageName=new TextBox {Width=180};TableLayoutPanel slots=new TableLayoutPanel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(8)};CheckBox auto=new CheckBox {Text="Gespeicherte Zuschauerfenster beim Programmstart öffnen",AutoSize=true},hw=new CheckBox {Text="Hardwaredecodierung verwenden",AutoSize=true};Label info=UI.Label("");List<DisplayForm> displays=new List<DisplayForm>();bool loading,launching;
  public MainForm(Settings s) {
   settings=s;DisplayConfigNames.Resolve(settings);Text="SpielfeldTV 0.8 · Verwaltung";Size=new Size(1240,830);MinimumSize=new Size(1050,690);UI.Style(this);
   var header=UI.Bar();header.Padding=new Padding(18);header.Controls.Add(new Label {Text="SPIELFELD TV",Font=new Font("Segoe UI",20,FontStyle.Bold),ForeColor=UI.Accent,AutoSize=true,Margin=new Padding(0,0,25,0)});header.Controls.Add(UI.Button("Zuschaueranzeigen starten",(a,b)=>Launch(false)));header.Controls.Add(UI.Button("Demo ansehen",(a,b)=>Launch(true)));header.Controls.Add(UI.Button("Anzeigen schließen",(a,b)=>CloseDisplays()));header.Controls.Add(UI.Button("Alles speichern",(a,b)=>Save()));
@@ -448,14 +454,14 @@ public partial class MainForm : Form {
  }
  bool Save(){try{CommitPage();settings.AutoOpen=auto.Checked;settings.Hardware=hw.Checked;settings.Cache=(int)cache.Value;Store.Save(settings);info.Text="Gespeichert · "+settings.Cameras.Count+" Kameras · "+DateTime.Now.ToString("HH:mm:ss");return true;}catch(Exception ex){UI.Error(ex);return false;}}
  void CloseDisplays(){foreach(var d in displays.ToArray())if(!d.IsDisposed)d.Close();displays.Clear();}
- void Launch(bool demo){if(!Save())return;if(!demo&&!Vlc.Init()){MessageBox.Show(Vlc.Failure,"VLC erforderlich");return;}
+ async void Launch(bool demo){if(launching||!Save())return;launching=true;UseWaitCursor=true;info.Text="Zuschaueranzeigen werden vorbereitet …";try{if(!demo){bool available=await Vlc.InitAsync();if(IsDisposed||Disposing)return;if(!available){MessageBox.Show(Vlc.Failure,"VLC erforderlich");return;}}if(IsDisposed||Disposing)return;
   var screens=Screen.AllScreens;var missing=settings.Pages.Where(p=>!settings.DisabledScreens.Contains(p.Screen)&&!screens.Any(sc=>sc.DeviceName==p.Screen)).ToList();
   if(missing.Count>0){MessageBox.Show("Bildschirm für diese Tabs bitte neu auswählen: "+String.Join(", ",missing.Select(p=>p.Name)),"Bildschirm fehlt");return;}
   var groups=settings.Pages.Where(p=>!settings.DisabledScreens.Contains(p.Screen)).GroupBy(p=>p.Screen).ToList();if(groups.Count>3){MessageBox.Show("Bitte höchstens drei Bildschirme zuweisen.");return;}
   if(settings.Pages.Any(p=>String.IsNullOrWhiteSpace(p.Name))){MessageBox.Show("Bitte jedem Tab einen Namen geben.");return;}
   if(settings.Pages.GroupBy(p=>p.Screen+"|"+p.Name).Any(g=>g.Count()>1)){MessageBox.Show("Tabs am selben Bildschirm benötigen unterschiedliche Namen.");return;}
   if(!demo && !settings.Pages.Any(p=>p.Slots.Take(p.Rows*p.Columns).Any(id=>settings.Cameras.Any(c=>c.Id==id)))){MessageBox.Show("Zuerst Kameras hinzufügen und im Raster zuweisen. Ohne Kameras kannst du die Demo öffnen.");return;}
-  CloseDisplays();foreach(var group in groups){var screen=screens.First(sc=>sc.DeviceName==group.Key);var f=new DisplayForm(settings,screen,group.ToList(),demo);displays.Add(f);f.Show();}Store.Save(settings);
+  CloseDisplays();foreach(var group in groups){var screen=screens.First(sc=>sc.DeviceName==group.Key);var f=new DisplayForm(settings,screen,group.ToList(),demo);displays.Add(f);f.Show();await Task.Yield();if(IsDisposed||Disposing)return;}Store.Save(settings);info.Text="Zuschaueranzeigen geöffnet · Kameras verbinden sich im Hintergrund.";}catch(Exception ex){if(!IsDisposed)UI.Error(ex);}finally{launching=false;if(!IsDisposed)UseWaitCursor=false;}
  }
 }
 public static class Program {
@@ -519,6 +525,9 @@ public static class Tests {
  }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}}
 }
 }
+
+
+
 
 
 
