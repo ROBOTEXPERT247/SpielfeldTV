@@ -1,0 +1,8 @@
+work/
+build/
+*.sftv
+settings.dat*
+*.exe
+*.zip
+*.log
+.vs/
