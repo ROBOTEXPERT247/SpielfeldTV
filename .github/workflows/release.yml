@@ -1,0 +1,27 @@
+name: Windows build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and package
+        shell: powershell
+        run: ./Build.ps1 -FullSetup
+      - name: Self tests
+        shell: powershell
+        run: |
+          $csc="$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:exe /platform:x64 /out:build\Tests.exe /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Xml.Linq.dll /reference:System.Security.dll /reference:System.Web.Extensions.dll SpielfeldTV.cs Features.cs
+          if($LASTEXITCODE){exit $LASTEXITCODE}
+          & build\Tests.exe --self-test
+          if($LASTEXITCODE){exit $LASTEXITCODE}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpielfeldTV-Windows
+          path: |
+            build/SpielfeldTV-*.exe
+            build/SpielfeldTV-*.sha256
