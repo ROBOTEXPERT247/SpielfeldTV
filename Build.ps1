@@ -1,6 +1,6 @@
 param([switch]$FullSetup)
 $ErrorActionPreference='Stop'
-$version='0.6.0'
+$version='0.6.1'
 $root=$PSScriptRoot
 $build=Join-Path $root 'build'
 $stage=Join-Path $build 'payload\SpielfeldTV'
